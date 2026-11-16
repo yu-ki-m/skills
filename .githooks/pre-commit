@@ -1,0 +1,35 @@
+#!/bin/sh
+# excel-html-output を変えるコミットの前に、その自動テストを実行し、1件でも失敗すればコミットを止める。
+# 有効にする（クローンごとに1回）: git config core.hooksPath .githooks
+#
+# 作業フォルダーではなく、コミットされる内容（インデックス）を一時フォルダーに書き出して試す。
+# 一部だけ git add した場合も、コミットされる内容そのものが試される。
+
+if git diff --cached --quiet -- excel-html-output; then
+  exit 0
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "excel-html-output: Node.js が見つからないため、テストを実行できません。コミットを止めました。" >&2
+  exit 1
+fi
+
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+
+if ! git checkout-index --all --prefix="$tmp/"; then
+  echo "excel-html-output: コミットする内容を一時フォルダーに書き出せませんでした。コミットを止めました。" >&2
+  exit 1
+fi
+
+echo "excel-html-output の変更を検出しました。コミットする内容で自動テストを実行します（1分ほどかかります）。"
+node "$tmp/excel-html-output/tests/run.mjs"
+status=$?
+if [ "$status" -eq 2 ]; then
+  echo "excel-html-output: この環境ではテストを実行できないため、コミットを止めました（理由は上に表示）。" >&2
+  exit 1
+elif [ "$status" -ne 0 ]; then
+  echo "excel-html-output: テストが失敗したため、コミットを止めました。失敗したテストを直してから、もう一度コミットしてください。" >&2
+  exit 1
+fi
+echo "excel-html-output: すべてのテストに合格しました。"

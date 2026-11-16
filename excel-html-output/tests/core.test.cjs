@@ -1,7 +1,8 @@
+// assets/core.js の関数：型、計算、表示、範囲操作、検査、Excel方言のクリップボードHTMLの書き出しと読み取り、Markdown。
 const assert=require('node:assert/strict');
+const {test}=require('node:test');
 const C=require('../assets/core.js');
 const make=()=>({schema:C.SCHEMA,id:'test',revision:'draft',title:'test',activeSheet:'s',sheets:[{id:'s',name:'Sheet1',rows:30,cols:15,cells:{},merges:[],rowHeights:[],colWidths:[]}]});
-let count=0;const test=(name,fn)=>{fn();count++;console.log('PASS '+name);};
 test('typed values retain zeros, identifiers, quotes and Unicode',()=>{assert.equal(C.infer('00123').t,'s');assert.equal(C.infer('1234567890123456').t,'s');assert.equal(C.infer('-1.25').v,-1.25);assert.equal(C.infer("'=A1").v,'=A1');assert.equal(C.infer('001\n日本語').v,'001\n日本語');assert.equal(C.infer('12',{s:{numFmt:'@'}}).t,'s');});
 test('formulas compute, reject code and handle IF lazily',()=>{const w=make(),s=w.sheets[0];s.cells={A1:{t:'n',v:2},A2:{t:'n',v:3},B1:{t:'f',f:'=SUM(A1:A2)*2'},B2:{t:'f',f:'=IF(A1=2,B1,1/0)'},C1:{t:'f',f:'=C1'},D1:{t:'f',f:'=fetch("https://x")'},D2:{t:'f',f:'=ROUND(-1.25,1)'},E1:{t:'f',f:'=A1/0'}};assert.equal(C.calculate(w,s,0,1),10);assert.equal(C.calculate(w,s,1,1),10);assert.equal(C.calculate(w,s,0,2),'#CIRC!');assert.equal(C.calculate(w,s,0,3),'#NAME?');assert.equal(C.calculate(w,s,1,3),-1.3);assert.equal(C.calculate(w,s,0,4),'#DIV/0!');});
 test('relative and absolute formula copying preserves literals',()=>{assert.equal(C.shiftFormula('=A1+$B2+C$3+$D$4&"A1"',2,3),'=D3+$B4+F$3+$D$4&"A1"');assert.equal(C.shiftFormula('=A1',-1,0),'=#REF!');});
@@ -47,4 +48,3 @@ test('pictures need real image data and stay inside the sheet',()=>{const w=make
   w.assets={a1:png};C.validate(w);
   for(const bad of ['data:image/svg+xml;base64,PHN2Zz4=','data:text/html;base64,PGI+','data:image/png;base64,<script>','javascript:alert(1)']){w.assets={a1:bad};assert.throws(()=>C.validate(w),/画像データ/,bad);}
   w.assets={a1:png};for(const patch of [{r:30},{c:15},{w:2},{x:-1},{id:''}]){s.images=[{id:'p1',asset:'a1',r:2,c:3,x:5,y:6,w:120,h:80,...patch}];assert.throws(()=>C.validate(w),/画像/,JSON.stringify(patch));}});
-console.log(`${count} behavioral tests passed.`);

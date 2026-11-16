@@ -1,0 +1,69 @@
+{
+  "schema": "excel-html-workbook/v1",
+  "id": "excel-html-test-fixture",
+  "revision": "draft",
+  "title": "テスト用ブック",
+  "activeSheet": "main",
+  "defaultStyle": {"font": "Yu Gothic", "size": 11},
+  "view": {"zoom": 100},
+  "sheets": [
+    {
+      "id": "main",
+      "name": "明細",
+      "rows": 30,
+      "cols": 10,
+      "colWidths": [96, 120, 80, 96, 110, 96, 96, 96, 40, 40],
+      "rowHeights": [30],
+      "merges": [{"r1": 10, "c1": 0, "r2": 11, "c2": 2}],
+      "cells": {
+        "A1": {"t": "s", "v": "テスト用の明細表（右の空いたセルへはみ出す長い題名）", "s": {"bold": true, "size": 14}},
+        "I2": {"t": "n", "v": 1234567890, "s": {"numFmt": "#,##0"}},
+        "J2": {"t": "n", "v": 3.14159265358979},
+        "A3": {"t": "s", "v": "品番", "s": {"bold": true, "fill": "#e2efda", "borderBottom": "2px solid #217346"}},
+        "B3": {"t": "s", "v": "品名", "s": {"bold": true, "fill": "#e2efda", "borderBottom": "2px solid #217346"}},
+        "C3": {"t": "s", "v": "数量", "s": {"bold": true, "fill": "#e2efda", "borderBottom": "2px solid #217346"}},
+        "D3": {"t": "s", "v": "単価", "s": {"bold": true, "fill": "#e2efda", "borderBottom": "2px solid #217346"}},
+        "E3": {"t": "s", "v": "金額", "s": {"bold": true, "fill": "#e2efda", "borderBottom": "2px solid #217346"}},
+        "A4": {"t": "s", "v": "00123", "s": {"numFmt": "@"}},
+        "B4": {"t": "s", "v": "保守作業"},
+        "C4": {"t": "n", "v": 3},
+        "D4": {"t": "n", "v": 12000, "s": {"numFmt": "¥#,##0"}},
+        "E4": {"t": "f", "f": "=C4*D4", "s": {"numFmt": "¥#,##0"}},
+        "A5": {"t": "s", "v": "00124", "s": {"numFmt": "@"}},
+        "B5": {"t": "s", "v": "監視"},
+        "C5": {"t": "n", "v": 2},
+        "D5": {"t": "n", "v": 5000, "s": {"numFmt": "¥#,##0"}},
+        "E5": {"t": "f", "f": "=C5*D5", "s": {"numFmt": "¥#,##0"}},
+        "A6": {"t": "s", "v": "00230", "s": {"numFmt": "@"}},
+        "B6": {"t": "s", "v": "設定作業"},
+        "C6": {"t": "n", "v": 1},
+        "D6": {"t": "n", "v": 30000, "s": {"numFmt": "¥#,##0"}},
+        "E6": {"t": "f", "f": "=C6*D6", "s": {"numFmt": "¥#,##0"}},
+        "D7": {"t": "s", "v": "小計"},
+        "E7": {"t": "f", "f": "=SUM(E4:E6)", "s": {"numFmt": "¥#,##0"}},
+        "D8": {"t": "s", "v": "消費税"},
+        "E8": {"t": "f", "f": "=ROUNDDOWN(E7*0.1,0)", "s": {"numFmt": "¥#,##0"}},
+        "D9": {"t": "s", "v": "合計"},
+        "E9": {"t": "f", "f": "=E7+E8", "s": {"numFmt": "¥#,##0", "bold": true}},
+        "A11": {"t": "s", "v": "結合セル", "s": {"align": "center"}},
+        "A14": {"t": "s", "v": "右のセルに値があるので途中で切れる長い文字列"},
+        "B14": {"t": "s", "v": "値あり"},
+        "B16": {"t": "s", "v": "サイト", "link": "https://example.com/"},
+        "C18": {"t": "s", "v": "", "s": {"borderLeft": "2px solid #ff0000"}}
+      }
+    },
+    {
+      "id": "sub",
+      "name": "予備",
+      "rows": 20,
+      "cols": 8,
+      "merges": [],
+      "rowHeights": [],
+      "colWidths": [],
+      "cells": {
+        "A1": {"t": "s", "v": "予備シートの値"},
+        "B2": {"t": "n", "v": 5}
+      }
+    }
+  ]
+}
