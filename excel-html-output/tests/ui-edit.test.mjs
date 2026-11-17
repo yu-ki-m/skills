@@ -144,6 +144,20 @@ test('編集中の Alt+Enter はセル内で改行し、確定すると折り返
   assert.equal(state.sheets.length, 2);
 });
 
+test('改行を打って行が高くなるときも、行の高さはExcelの上限の546pxを超えない', async t => {
+  const x = await env.open(t, book);
+  await x.clickCell('B20');
+  await x.type('1行目');
+  for (let i = 2; i <= 40; i++) {
+    await x.press('Alt+Enter');
+    await x.type(`${i}行目`);
+  }
+  await x.press('Enter');
+  const s = (await x.state()).sheet('main');
+  assert.equal(s.cells.B20.v.split('\n').length, 40);
+  assert.equal(s.rowHeights[19], 546, '40行分（およそ700px）でも、546px で止まる');
+});
+
 test('打ち始めた直後の Alt+Enter も改行になる', async t => {
   const x = await env.open(t, book);
   await x.clickCell('H8');
@@ -227,6 +241,22 @@ test('数式バーの ✓ は確定して移動せず、× は取り消す', asy
   await x.click('#cancel-edit');
   assert.equal(await x.text('B4'), '確定する');
   assert.equal(await x.editing(), false);
+});
+
+test('見出しで選んだ列に結合セルの一部だけが入るときは、Excelと同じく Delete で消さずに知らせる', async t => {
+  const x = await env.open(t, book);
+  await x.click('#grid th[data-col="1"]');
+  await x.press('Delete');
+  const dialog = await x.dialog();
+  assert.equal(dialog?.title, '操作を完了できません');
+  assert.equal(dialog?.body, 'この操作は結合したセルには行えません。', 'Excelと同じ知らせ（A11:C12 の結合が列Bに一部だけかかる）');
+  await x.answer('ok');
+  assert.equal(await x.text('B4'), '保守作業', '列Bの値は消えない');
+  assert.equal(await x.text('A11'), '結合セル', '結合セルの値も消えない');
+  await x.click('#grid th[data-col="3"]');
+  await x.press('Delete');
+  assert.equal(await x.dialog(), null, '結合のかからない列Dは消せる');
+  assert.equal(await x.text('D4'), '');
 });
 
 test('Delete は範囲の値を消して書式を残し、Backspace は消してから編集を始める', async t => {

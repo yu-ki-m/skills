@@ -1,10 +1,13 @@
 /* Excel HTML Output — original implementation, no runtime dependencies. */
 (function(root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.ExcelHTMLCore = factory();
-})(typeof globalThis !== 'undefined' ? globalThis : this, function() {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./toon.js'));
+  else root.ExcelHTMLCore = factory(root.ExcelHTMLToon);
+})(typeof globalThis !== 'undefined' ? globalThis : this, function(TOON) {
   'use strict';
   const SCHEMA = 'excel-html-workbook/v1';
+  // Column widths and row heights as [smallest, largest], in CSS pixels. The largest are Excel's: the widest column
+  // and the highest row that Excel can set.
+  const SIZE_LIMITS = {colWidth: [24, 2044], rowHeight: [16, 546]};
   const FORMATS = ['General','@','0','0.00','#,##0','#,##0.00','0%','0.00%','¥#,##0','yyyy/mm/dd'];
   // Excel's own clipboard spelling of each format (measured on Excel 2021 copy output).
   const MSO_FORMAT = {'General':'General','@':'"\\@"','0':'0','0.00':'Fixed','#,##0':'"\\#\\,\\#\\#0"','#,##0.00':'Standard',
@@ -31,6 +34,16 @@
   const style=(w,s,cell)=>({...DEFAULT,...w.defaultStyle,...s.defaultStyle,...cell.s});
   function mergeAt(s,r,c){return s.merges.find(m=>within(r,c,m));}
   function expanded(s,q){q={...q};let changed=true;while(changed){changed=false;for(const m of s.merges) if(overlap(q,m)){const n=rect([Math.min(q.r1,m.r1),Math.min(q.c1,m.c1)],[Math.max(q.r2,m.r2),Math.max(q.c2,m.c2)]);if(!same(n,q)){q=n;changed=true;}}}return q;}
+  // The area a selection covers. As in Excel, whole rows or whole columns (chosen with the headers) stay as chosen:
+  // clicking column B selects B alone even where A11:C12 is merged. Any other range takes in every merged cell it
+  // touches. A selection of whole rows or columns can therefore hold only part of a merged cell (see splitsMerge).
+  const selectionArea=(s,q)=>q.r1===0&&q.r2===s.rows-1||q.c1===0&&q.c2===s.cols-1?q:expanded(s,q);
+  const inside=(m,q)=>within(m.r1,m.c1,q)&&within(m.r2,m.c2,q);
+  // Whether q holds only part of some merged cell. Excel refuses to cut or clear such a range ("この操作は結合した
+  // セルには行えません。", desktop Excel 16.0), and copies it as separate cells.
+  const splitsMerge=(s,q)=>s.merges.some(m=>overlap(m,q)&&!inside(m,q));
+  // The merged cell at (r,c), if it lies wholly inside q; a merged cell only partly inside q is copied as separate cells.
+  const mergeIn=(s,r,c,q)=>{const m=mergeAt(s,r,c);return m&&inside(m,q)?m:undefined;};
   const PICTURE_DATA=/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
   // assetsDetached: the editor keeps picture bytes outside the book while editing, so references are not checked then.
   function validate(w,{assetsDetached=false}={}) {
@@ -73,7 +86,7 @@
         vs(cell.s);
       }
       vs(s.defaultStyle);
-      for(const [field,maxLen,min,max] of [['colWidths',s.cols,24,800],['rowHeights',s.rows,16,600]]) {
+      for(const [field,maxLen,min,max] of [['colWidths',s.cols,...SIZE_LIMITS.colWidth],['rowHeights',s.rows,...SIZE_LIMITS.rowHeight]]) {
         if(!Array.isArray(s[field])||s[field].length>maxLen||s[field].some(v=>v!==null&&(!Number.isFinite(v)||v<min||v>max))) fail(field);
       }
       for(let i=0;i<s.merges.length;i++){
@@ -277,8 +290,11 @@
     return (m[1]?-1:1)*n/(m[3]?100:1);
   }
   function shiftFormula(f,dr,dc){return f.replace(/"(?:[^"]|"")*"|\$?[A-Z]{1,3}\$?[1-9]\d*/gi,m=>{if(m[0]==='"')return m;const p=/^(\$?)([A-Z]+)(\$?)(\d+)$/i.exec(m),[r,c]=coord(m),nr=r+(p[3]?0:dr),nc=c+(p[1]?0:dc);return nr<0||nc<0||nr>=500||nc>=100?'#REF!':p[1]+colName(nc)+p[3]+(nr+1);});}
+  // rangeData, clipboard and markdown copy exactly the range q, as Excel does: a merged cell wholly inside q stays
+  // merged, and one only partly inside q is copied as separate cells (its value goes with its top-left cell).
+  // A selection of cells always takes in whole merged cells (selectionArea), so only whole rows or columns differ.
   function rangeData(w,s,q) {
-    q=expanded(s,q);const cells={},merges=s.merges.filter(m=>overlap(m,q)).map(m=>({r1:m.r1-q.r1,r2:m.r2-q.r1,c1:m.c1-q.c1,c2:m.c2-q.c1}));
+    const cells={},merges=s.merges.filter(m=>inside(m,q)).map(m=>({r1:m.r1-q.r1,r2:m.r2-q.r1,c1:m.c1-q.c1,c2:m.c2-q.c1}));
     each(q,(r,c)=>{const cell=clone(get(s,r,c));cell.s=style(w,s,cell);cells[addr(r-q.r1,c-q.c1)]=cell;});
     return {version:1,source:{book:w.id,sheet:s.id,r:q.r1,c:q.c1},rows:q.r2-q.r1+1,cols:q.c2-q.c1+1,cells,merges,colWidths:Array.from({length:q.c2-q.c1+1},(_,i)=>width(s,q.c1+i)),rowHeights:Array.from({length:q.r2-q.r1+1},(_,i)=>height(s,q.r1+i))};
   }
@@ -288,7 +304,7 @@
   // whose references stay inside the copied range. Strings Excel would convert are also marked "\@" so that a
   // reader which ignores x:str (possibly Excel for the web) still keeps the text.
   function clipboard(w,s,q) {
-    q=expanded(s,q);const data=rangeData(w,s,q),cache=new Map(),plain=[];
+    const data=rangeData(w,s,q),cache=new Map(),plain=[];
     const pt=px=>+(px*.75).toFixed(2),totalW=Array.from({length:q.c2-q.c1+1},(_,i)=>width(s,q.c1+i)).reduce((a,b)=>a+b,0);
     let html='<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">'+
       '<head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="ProgId" content="Excel.Sheet"></head><body>'+
@@ -297,7 +313,7 @@
     for(let r=q.r1;r<=q.r2;r++){
       html+='<tr height="'+height(s,r)+'" style="mso-height-source:userset;height:'+pt(height(s,r))+'pt">';const row=[];
       for(let c=q.c1;c<=q.c2;c++) {
-        const merge=mergeAt(s,r,c),hidden=merge&&(r!==merge.r1||c!==merge.c1),cell=get(s,r,c),value=calculate(w,s,r,c,new Set(),cache),st=style(w,s,cell),label=display(value,st.numFmt);row.push(tsvQuote(hidden?'':label));if(hidden)continue;
+        const merge=mergeIn(s,r,c,q),hidden=merge&&(r!==merge.r1||c!==merge.c1),cell=get(s,r,c),value=calculate(w,s,r,c,new Set(),cache),st=style(w,s,cell),label=display(value,st.numFmt);row.push(tsvQuote(hidden?'':label));if(hidden)continue;
         const colspan=merge?merge.c2-merge.c1+1:1,rowspan=merge?merge.r2-merge.r1+1:1,cw=Array.from({length:colspan},(_,i)=>width(s,c+i)).reduce((a,b)=>a+b,0);
         let attrs='',cst=st;
         if(cell.t==='f'){const f=blockFormula(cell.f,q);if(f)attrs+=' x:fmla="'+attr(f)+'"';}
@@ -318,11 +334,11 @@
   // top-left cell; trailing rows and columns without any value are left out; cells are padded
   // (East Asian wide characters count as two) so that the text also lines up in plain editors.
   function markdown(w,s,q) {
-    q=expanded(s,q);const cache=new Map(),grid=[];
+    const cache=new Map(),grid=[];
     for(let r=q.r1;r<=q.r2;r++){
       const row=[];
       for(let c=q.c1;c<=q.c2;c++){
-        const merge=mergeAt(s,r,c);if(merge&&(r!==merge.r1||c!==merge.c1)){row.push({text:'',align:''});continue;}
+        const merge=mergeIn(s,r,c,q);if(merge&&(r!==merge.r1||c!==merge.c1)){row.push({text:'',align:''});continue;}
         const cell=get(s,r,c),value=calculate(w,s,r,c,new Set(),cache),st=style(w,s,cell),label=String(display(value,st.numFmt));
         let text=label.replace(/\r\n?/g,'\n').replace(/\|/g,'\\|').replace(/\n/g,'<br>');
         if(cell.link&&text)text='['+text.replace(/[[\]]/g,'\\$&')+']('+cell.link.replace(/[ ()|]/g,ch=>'%'+ch.charCodeAt(0).toString(16).toUpperCase())+')';
@@ -362,6 +378,28 @@
     if(dimensions){data.colWidths?.forEach((v,i)=>{s.colWidths[c+i]=v;});data.rowHeights?.forEach((v,i)=>{s.rowHeights[r+i]=v;});}
     return q;
   }
-  return {SCHEMA,FORMATS,MSO_FORMAT,BORDER_XL,DEFAULT,xlCss,excelWouldConvert,blockFormula,generalAlign,
+  // The text that 「AIに渡す」 hands to Claude Code. By default the state is written as TOON (toon.js, specification 4.4),
+  // which says the same as the JSON in fewer characters, between the first line and an end line. The end line is what
+  // shows that a TOON text was not cut short: TOON has no closing braces, so a text cut between two lines could
+  // otherwise still read as a whole. The JSON form stays exactly as it always was, and is read as before.
+  const STATE_FIRST = 'EXCEL_HTML_STATE_V1', STATE_TOON = STATE_FIRST + ' TOON', STATE_END = 'EXCEL_HTML_STATE_END';
+  function stateText(state, format = 'toon') {
+    if (format === 'json') return STATE_FIRST + '\n' + JSON.stringify(state, null, 2);
+    return STATE_TOON + '\n' + TOON.encode(state) + '\n' + STATE_END;
+  }
+  function readStateText(text) {
+    const raw = String(text).replace(/^﻿/, '').trim(), nl = raw.indexOf('\n');
+    const first = (nl < 0 ? raw : raw.slice(0, nl)).replace(/[ \t\r]+$/, '');
+    if (first === STATE_FIRST) {
+      try { return JSON.parse(raw.slice(nl + 1)); }
+      catch (e) { throw Error('状態テキストのJSONを読み取れません（途中で切れているか、書き換えられています）: ' + e.message); }
+    }
+    if (first !== STATE_TOON) throw Error('編集状態はEXCEL_HTML_STATE_V1で始まる完全なテキストを渡してください。');
+    const end = raw.lastIndexOf('\n');
+    if (nl < 0 || raw.slice(end + 1).replace(/[ \t\r]+$/, '') !== STATE_END)
+      throw Error('状態テキストの最後の行が ' + STATE_END + ' ではありません。途中で切れているので、コピーし直したテキストか、エクスポートしたファイルを渡してください。');
+    return TOON.decode(end > nl ? raw.slice(nl + 1, end) : '', {firstLine: 2});
+  }
+  return {SCHEMA,SIZE_LIMITS,FORMATS,MSO_FORMAT,BORDER_XL,DEFAULT,stateText,readStateText,selectionArea,splitsMerge,xlCss,excelWouldConvert,blockFormula,generalAlign,
     cssUnescape,parseDecls,parseRules,cssHex,formatFromMso,borderFromCss,styleFromDecls,valueFromDisplay,clone,esc,colName,addr,coord,rect,range,within,overlap,same,each,get,style,mergeAt,expanded,validate,width,height,infer,raw,isErr,calculate,evalFormula,display,css,shiftFormula,rangeData,clipboard,markdown,parseTSV,paste};
 });

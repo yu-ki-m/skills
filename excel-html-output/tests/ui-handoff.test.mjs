@@ -15,16 +15,21 @@ const beforeUnloadBlocked = x => x.evaluate(() => {
   return event.defaultPrevented;
 });
 
-test('Ctrl+S で、ブック全体と表示位置を含む状態テキストを、元のブックIDとリビジョン付きで出す', async t => {
+const chosenFormat = x => x.evaluate(() => document.querySelector('input[name="handoff-format"]:checked')?.value);
+
+test('Ctrl+S で、ブック全体と表示位置を含む状態テキストを、既定ではTOONで、元のブックIDとリビジョン付きで出す', async t => {
   const x = await env.open(t, book);
   const embedded = embeddedBook(x.html);
   await x.enter('B4', '点検作業');
   await x.select('C4:D5');
   await x.press('Control+s');
   await x.waitDialog('handoff-dialog');
+  assert.equal(await chosenFormat(x), 'toon', '形式は TOON が選ばれている');
+  assert.equal(await x.evaluate(() => document.activeElement?.id), 'handoff-text', '開いたときは、テキストの欄にフォーカスがある');
   const text = await x.value('handoff-text');
-  assert.ok(text.startsWith('EXCEL_HTML_STATE_V1\n'));
-  const state = JSON.parse(text.slice(text.indexOf('\n') + 1));
+  assert.ok(text.startsWith('EXCEL_HTML_STATE_V1 TOON\n'), '1行目で形式を示す');
+  assert.ok(text.endsWith('\nEXCEL_HTML_STATE_END'), '最後の行で、テキストが切れていないことを示す');
+  const state = Core.readStateText(text);
   assert.equal(state.schema, 'excel-html-state/v1');
   assert.equal(state.workbookId, 'excel-html-test-fixture');
   assert.equal(state.baseRevision, embedded.revision);
@@ -36,6 +41,59 @@ test('Ctrl+S で、ブック全体と表示位置を含む状態テキストを�
   assert.deepEqual(state.workbook.view.active, [3, 2]);
   assert.equal(state.workbook.sheets.length, 2, '全シートを渡す');
   assert.match(await x.textOf('#handoff-result'), /このテキストだけで元HTMLは更新されません/);
+});
+
+test('形式で JSON を選ぶと同じ状態をJSONで出し、コピーもJSONになる。TOON に戻すと元のテキストに戻る', async t => {
+  const x = await env.open(t, book);
+  await x.enter('B4', '点検作業');
+  await x.press('Control+s');
+  await x.waitDialog('handoff-dialog');
+  const toon = await x.value('handoff-text');
+  await x.click('#handoff-json');
+  assert.equal(await chosenFormat(x), 'json');
+  const json = await x.value('handoff-text');
+  assert.ok(json.startsWith('EXCEL_HTML_STATE_V1\n{'), '1行目の後はJSON');
+  assert.deepEqual(JSON.parse(json.slice(json.indexOf('\n') + 1)), Core.readStateText(toon), 'TOON と同じ状態（書き出した時刻も同じ）');
+  assert.ok(toon.length < json.length, 'TOON の方が短い');
+  await x.click('#copy-state');
+  await x.waitFor(() => window.__testClipboard.writes > 0, {message: '状態テキストのコピー'});
+  const [entry] = await x.clipboard();
+  assert.equal(entry.text, json, '選んだ形式のテキストをコピーする');
+  await x.click('#handoff-toon');
+  assert.equal(await x.value('handoff-text'), toon, 'TOON に戻すと、同じ時点の TOON に戻る');
+});
+
+test('JSON で書き出した状態テキストも、build.py で反映できる', async t => {
+  const dir = tempDir();
+  t.after(() => removeDir(dir));
+  const html = join(dir, '明細表.html');
+  copyFileSync(env.build(book), html);
+  const x = await env.open(t, html);
+  await x.enter('B4', 'JSONで渡した編集');
+  await x.press('Control+s');
+  await x.waitDialog('handoff-dialog');
+  await x.click('#handoff-json');
+  const edits = join(dir, 'edits.txt');
+  writeFileSync(edits, await x.value('handoff-text'), 'utf8');
+  const result = runBuild(['--base', html, '--state', edits]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(embeddedBook(html).sheets[0].cells.B4.v, 'JSONで渡した編集');
+});
+
+test('状態テキストを書き出せないときは、理由をダイアログに出し、空のテキストをコピーしたことにしない', async t => {
+  const x = await env.open(t, book);
+  await x.enter('B4', '点検作業');
+  // A fault the page cannot produce by itself today: the TOON encoder refusing the state.
+  await x.evaluate(() => { window.ExcelHTMLToon.encode = () => { throw new Error('TOONに書き出せない文字（試験用）があります'); }; });
+  await x.press('Control+s');
+  await x.waitDialog('handoff-dialog');
+  assert.equal(await x.value('handoff-text'), '');
+  assert.match(await x.textOf('#handoff-result'), /TOONに書き出せない文字（試験用）があります/);
+  await x.click('#copy-state');
+  assert.equal(await x.evaluate(() => window.__testClipboard.writes), 0, 'クリップボードに何も書かない');
+  assert.equal(await x.textOf('#dirty-state'), '編集あり · AIへ書き出し', '書き出し済みにしない');
+  await x.click('#handoff-json');
+  assert.ok((await x.value('handoff-text')).startsWith('EXCEL_HTML_STATE_V1\n{'), 'JSON なら書き出せる');
 });
 
 test('「テキストをコピー」は状態テキストをクリップボードへ入れ、未書き出しの印を消す', async t => {
@@ -86,8 +144,9 @@ test('画面で編集した状態テキストを build.py で反映すると、�
   await x.click('[data-tab="cells"]');
   await x.setControl('column-width', '130');
   await x.click('#add-sheet');
-  const edits = join(dir, 'edits.txt');
-  writeFileSync(edits, (await x.state()).raw, 'utf8');
+  const edits = join(dir, 'edits.txt'), {raw} = await x.state();
+  assert.ok(raw.startsWith('EXCEL_HTML_STATE_V1 TOON\n'), '既定の TOON で渡す');
+  writeFileSync(edits, raw, 'utf8');
 
   const result = runBuild(['--base', html, '--state', edits]);
   assert.equal(result.status, 0, result.stderr);

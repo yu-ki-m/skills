@@ -7,10 +7,11 @@ import {fixture} from './lib/workbook.mjs';
 const env = useBrowser();
 const book = fixture('book');
 
-/** Point inside the visible part (the inner 4px) of a column or row resize grip. */
+/** Point inside the visible part (the inner 4px, drawn smaller when zoomed out) of a column or row resize grip. */
 const grip = (x, selector) => x.evaluate(s => {
-  const el = document.querySelector(s), r = el.getBoundingClientRect();
-  return el.classList.contains('col-resize') ? {x: r.left + 2, y: r.top + r.height / 2} : {x: r.left + r.width / 2, y: r.top + 2};
+  const el = document.querySelector(s), r = el.getBoundingClientRect(), col = el.classList.contains('col-resize');
+  const zoom = col ? r.width / el.offsetWidth : r.height / el.offsetHeight;
+  return col ? {x: r.left + 2 * zoom, y: r.top + r.height / 2} : {x: r.left + r.width / 2, y: r.top + 2 * zoom};
 }, selector);
 
 /** Selects whole rows (or columns) first..last, 0-based, as a person does: click the first header, Shift+click the last. */
@@ -208,6 +209,22 @@ test('列幅・行の高さは、数値の入力でも、見出しの境界の�
   assert.deepEqual([sheet.colWidths[1], sheet.rowHeights[5] ?? null], [120, null], 'ドラッグで変えた幅と高さも、元に戻せる');
 });
 
+test('結合セルがかかる列を見出しで選んで幅や書式を変えると、Excelと同じくその列だけが変わる', async t => {
+  const x = await env.open(t, book);
+  // A11:C12 is merged across columns A to C.
+  await x.click('#grid th[data-col="1"]');
+  await x.click('[data-tab="cells"]');
+  await x.setControl('column-width', '150');
+  let sheet = (await x.state()).sheet('main');
+  assert.deepEqual(sheet.colWidths.slice(0, 3), [96, 150, 80], '列Bの幅だけが変わる');
+  await x.click('#grid th[data-col="1"]');
+  await x.press('Control+b');
+  sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.cells.B4.s?.bold, true, '列Bのセルは太字になる');
+  assert.notEqual(sheet.cells.A11.s?.bold, true, '列Bに一部だけかかる結合セル（A11）は太字にならない');
+  assert.notEqual(sheet.cells.A4?.s?.bold, true, '列Aは変わらない');
+});
+
 test('「列幅の自動調整」は、選んだ列の幅を中身に合わせる', async t => {
   const x = await env.open(t, book);
   await x.clickCell('B4');
@@ -311,6 +328,63 @@ test('ドラッグした境界の行や列を見出しで丸ごと選んでい�
   const col = await grip(x, '[data-resize-col="4"]');
   await x.page.drag(col, {x: col.x + 30, y: col.y});
   assert.deepEqual((await x.state()).sheet('main').colWidths.slice(3, 6), [96, 140, 96], 'セルの範囲を選んでいるだけなら、Excelと同じく境界のE列だけが変わる');
+});
+
+// The largest sizes are Excel's: a column up to 2044px wide and a row up to 546px high, however the size is set.
+test('見出しの境界のドラッグで広げられるのは、Excelと同じく列幅2044px・行の高さ546pxまで', async t => {
+  const zoomed = fixture('book');
+  zoomed.view = {zoom: 50};  // At 50%, the size changes twice as much as the mouse moves, so the limits are within the window.
+  const x = await env.open(t, zoomed);
+  const col = await grip(x, '[data-resize-col="1"]');
+  await x.page.drag(col, {x: col.x + 1000, y: col.y});
+  const row = await grip(x, '[data-resize-row="5"]');
+  await x.page.drag(row, {x: row.x, y: row.y + 300});
+  const sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.colWidths[1], 2044, 'B列（120px）を 2000px 広げようとしても、2044px で止まる');
+  assert.equal(sheet.rowHeights[5], 546, '6行目（22px）を 600px 広げようとしても、546px で止まる');
+});
+
+test('自動調整でも、列幅は2044px、行の高さは546pxを超えない', async t => {
+  const long = fixture('book');
+  // 200 full-width letters (about 2,900px wide) and 40 lines (about 700px high), in rows that are otherwise empty.
+  Object.assign(long.sheets[0].cells, {
+    B20: {t: 's', v: 'あ'.repeat(200)},
+    C22: {t: 's', v: Array.from({length: 40}, (_, i) => `${i + 1}行目`).join('\n'), s: {wrap: true}},
+  });
+  const x = await env.open(t, long);
+  await x.clickCell('C22');
+  await x.action('autofit-row');
+  await x.clickCell('B20');
+  await x.action('autofit-col');
+  const sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.rowHeights[21], 546, '40行の22行目');
+  assert.equal(sheet.colWidths[1], 2044, '200文字のB列');
+});
+
+test('リボンの列幅・行高の欄は、2044pxと546pxまで受け付け、それを超える値は受け付けない', async t => {
+  const x = await env.open(t, book);
+  await x.clickCell('C4');
+  await x.click('[data-tab="cells"]');
+  // The up arrow key of a number box, pressed once from value.
+  const stepUp = async (id, value) => {
+    await x.evaluate((id, value) => { const el = document.getElementById(id); el.focus(); el.value = String(value); }, id, value);
+    await x.press('ArrowUp');
+    return x.value(id);
+  };
+  assert.equal(await stepUp('column-width', 2043), '2044');
+  assert.equal(await stepUp('row-height', 545), '546');
+  let sheet = (await x.state()).sheet('main');
+  assert.deepEqual([sheet.colWidths[2], sheet.rowHeights[3]], [2044, 546], '上矢印キーで、C列の幅と4行目の高さが上限になる');
+  assert.equal(await stepUp('column-width', 2044), '2044', '上限より先へは増えない');
+  assert.equal(await stepUp('row-height', 546), '546', '上限より先へは増えない');
+  assert.equal(await x.dialog(), null);
+  for (const [id, size] of [['column-width', 2045], ['row-height', 547]]) {
+    await x.setControl(id, size);
+    assert.equal((await x.dialog())?.title, '操作を完了できません', `${size}px は受け付けない`);
+    await x.answer('ok');
+  }
+  sheet = (await x.state()).sheet('main');
+  assert.deepEqual([sheet.colWidths[2], sheet.rowHeights[3]], [2044, 546], '受け付けなかったときは元のまま');
 });
 
 test('「枠線の表示」で補助の枠線を消し、もう一度押すと戻す', async t => {

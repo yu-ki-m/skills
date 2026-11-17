@@ -46,10 +46,45 @@ test('行見出し・列見出し・左上の角をクリックすると、行�
   await x.click('#grid th[data-col="3"]');
   assert.equal(await x.nameBox(), 'D1:D30');
   await x.click('#grid th[data-col="2"]');
-  assert.equal(await x.nameBox(), 'A1:C30', 'Excelと同じく、列にかかる結合セル（A11:C12）の列まで広がる');
+  assert.equal(await x.nameBox(), 'C1:C30', 'Excelと同じく、結合セル（A11:C12）がかかる列でも、押した列だけを選ぶ');
   await x.click('#grid th[data-corner]');
   assert.equal(await x.nameBox(), 'A1:J30');
   assert.equal(await x.selectionSize(), '30行 × 10列');
+});
+
+test('結合セルが一部の行にあっても、見出しで選ぶと押した列・行だけが選ばれ、ドラッグや Shift で広げても結合の分まで広がらない', async t => {
+  const x = await env.open(t, book);
+  // A11:C12 is merged: it crosses columns A to C and rows 11 to 12.
+  await x.click('#grid th[data-col="1"]');
+  assert.equal(await x.nameBox(), 'B1:B30');
+  assert.equal(await x.selectionSize(), '30行 × 1列');
+  assert.ok(await x.selectionFrameGap('B1', 'B30') <= 1, '緑の枠も列Bだけを囲む');
+  await x.click('#grid th[data-row="10"]');
+  assert.equal(await x.nameBox(), 'A11:J11');
+  assert.equal(await x.selectionSize(), '1行 × 10列');
+  await x.page.drag(await x.point('#grid th[data-col="1"]'), await x.point('#grid th[data-col="2"]'));
+  assert.equal(await x.nameBox(), 'B1:C30', 'ドラッグで選んだ2列だけ');
+  await x.click('#grid th[data-col="1"]');
+  await x.click('#grid th[data-col="2"]', {shift: true});
+  assert.equal(await x.nameBox(), 'B1:C30', 'Shift+クリックで選んだ2列だけ');
+  await x.click('#grid th[data-col="1"]');
+  await x.press('Shift+ArrowRight');
+  assert.equal(await x.nameBox(), 'B1:C30', 'Shift+→ で広げた2列だけ');
+  await x.clickCell('B10');
+  await x.clickCell('B11', {shift: true});
+  assert.equal(await x.nameBox(), 'A10:C12', 'セルの範囲を選んだときは、これまでどおり結合セル全体を含む');
+});
+
+test('列の一番上のセルが結合セルの一部でも、見出しで選んだ列だけを緑の枠で囲む', async t => {
+  const x = await env.open(t, blankBook({sheet: {rows: 8, cols: 5, cells: {B1: {t: 's', v: '題名'}}, merges: [{r1: 0, c1: 1, r2: 0, c2: 2}]}}));
+  await x.click('#grid th[data-col="2"]');
+  assert.equal(await x.nameBox(), 'C1:C8');
+  const gap = await x.evaluate(() => {
+    const frame = document.getElementById('selection').getBoundingClientRect(), box = s => document.querySelector(s).getBoundingClientRect();
+    const col = box('#grid th[data-col="2"]'), first = box('#grid th[data-row="0"]'), last = box('#grid th[data-row="7"]');
+    return Math.max(Math.abs(frame.left - col.left), Math.abs(frame.right - col.right), Math.abs(frame.top - first.top), Math.abs(frame.bottom - last.bottom));
+  });
+  assert.ok(gap <= 1, `枠が列Cの範囲から ${gap}px ずれている（C1 を隠す結合 B1:C1 の左端まで広がっていないこと）`);
 });
 
 test('矢印キーで移動し、Shift+矢印で範囲を広げる', async t => {

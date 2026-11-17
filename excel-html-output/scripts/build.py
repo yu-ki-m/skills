@@ -2,7 +2,9 @@
 """Build an offline HTML workbook or apply a version-matched state export.
 
 Python 3.10+ and Node.js 18+; no pip/npm packages. Validation uses the exact
-same model validator as the browser. Never executes input HTML or cell data.
+same model validator as the browser, and a state export (TOON, the page's
+default, or JSON) is read by the same code that wrote it (assets/core.js).
+Never executes input HTML or cell data.
 An existing output file is never overwritten: it is first renamed to
 <name>_<YYYYMMDDHHMMSS><suffix>, and the new content takes the original name.
 """
@@ -31,16 +33,28 @@ def revision(workbook):
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def validate(workbook):
-    program = "const C=require(process.argv[1]);let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{try{C.validate(JSON.parse(s));}catch(e){console.error(e.message);process.exitCode=1;}});"
+def run_core(body, text):
+    """Runs body (JavaScript, with C = assets/core.js and s = text) in Node and returns what it writes to stdout."""
+    program = ("const C=require(process.argv[1]);let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);"
+               "process.stdin.on('end',()=>{try{" + body + "}catch(e){console.error(e.message);process.exitCode=1;}});")
     try:
         result = subprocess.run(["node", "-e", program, str(ROOT / "assets" / "core.js")],
-                                input=json.dumps(workbook, ensure_ascii=False), text=True,
-                                encoding="utf-8", capture_output=True, check=False)
+                                input=text, text=True, encoding="utf-8", capture_output=True, check=False)
     except FileNotFoundError as exc:
         raise ValueError("Node.js 18+ が必要です。生成後のHTMLの閲覧にはNodeは不要です。") from exc
     if result.returncode:
         raise ValueError(result.stderr.strip())
+    return result.stdout
+
+
+def validate(workbook):
+    run_core("C.validate(JSON.parse(s));", json.dumps(workbook, ensure_ascii=False))
+
+
+def read_state(path):
+    """The state object of a 「AIに渡す」 text, TOON or JSON. A text cut short or changed inside is refused."""
+    text = Path(path).read_text(encoding="utf-8-sig")
+    return json.loads(run_core("process.stdout.write(JSON.stringify(C.readStateText(s)));", text))
 
 
 def read_base(path):
@@ -57,11 +71,8 @@ def read_base(path):
 
 def apply_state(base_path, state_path):
     base = read_base(base_path)
-    raw = Path(state_path).read_text(encoding="utf-8-sig").strip()
-    if not raw.startswith("EXCEL_HTML_STATE_V1\n"):
-        raise ValueError("編集状態はEXCEL_HTML_STATE_V1で始まる完全なテキストを渡してください。")
-    state = json.loads(raw.split("\n", 1)[1])
-    if state.get("schema") != "excel-html-state/v1":
+    state = read_state(state_path)
+    if not isinstance(state, dict) or state.get("schema") != "excel-html-state/v1":
         raise ValueError("状態形式が不正です。")
     if state.get("workbookId") != base["id"] or state.get("baseRevision") != base["revision"]:
         raise ValueError("元ブックIDまたはリビジョンが一致しません。競合を無視した上書きは行いません。")
@@ -81,6 +92,7 @@ def build(workbook):
     tokens = {
         "__TITLE__": html.escape(workbook["title"]),
         "/*__STYLE__*/": (ROOT / "assets" / "style.css").read_text(encoding="utf-8"),
+        "/*__TOON__*/": (ROOT / "assets" / "toon.js").read_text(encoding="utf-8"),
         "/*__CORE__*/": (ROOT / "assets" / "core.js").read_text(encoding="utf-8"),
         "/*__APP__*/": (ROOT / "assets" / "app.js").read_text(encoding="utf-8"),
         "/*__DATA__*/": data,
@@ -129,7 +141,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, help="新規ブックJSON")
     parser.add_argument("--base", type=Path, help="編集元の生成HTML")
-    parser.add_argument("--state", type=Path, help="AI用状態テキスト")
+    parser.add_argument("--state", type=Path, help="AI用状態テキスト（TOONかJSON）")
     parser.add_argument("--output", type=Path,
                         help="出力先。--base と --state で反映するときは省略でき、省略すると --base と同じファイルに書き出す")
     parser.add_argument("--extract-json", action="store_true", help="状態適用後のJSONを出力（AIによる追加編集用）")

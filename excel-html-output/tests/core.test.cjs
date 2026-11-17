@@ -1,4 +1,4 @@
-// assets/core.js の関数：型、計算、表示、範囲操作、検査、Excel方言のクリップボードHTMLの書き出しと読み取り、Markdown。
+// assets/core.js の関数：型、計算、表示、範囲操作、検査、Excel方言のクリップボードHTMLの書き出しと読み取り、Markdown、AIに渡す状態テキスト。
 const assert=require('node:assert/strict');
 const {test}=require('node:test');
 const C=require('../assets/core.js');
@@ -48,3 +48,31 @@ test('pictures need real image data and stay inside the sheet',()=>{const w=make
   w.assets={a1:png};C.validate(w);
   for(const bad of ['data:image/svg+xml;base64,PHN2Zz4=','data:text/html;base64,PGI+','data:image/png;base64,<script>','javascript:alert(1)']){w.assets={a1:bad};assert.throws(()=>C.validate(w),/画像データ/,bad);}
   w.assets={a1:png};for(const patch of [{r:30},{c:15},{w:2},{x:-1},{id:''}]){s.images=[{id:'p1',asset:'a1',r:2,c:3,x:5,y:6,w:120,h:80,...patch}];assert.throws(()=>C.validate(w),/画像/,JSON.stringify(patch));}});
+test('column widths and row heights stay within what Excel can set: 24-2044px wide, 16-546px high',()=>{const w=make(),s=w.sheets[0];s.colWidths=[24,2044];s.rowHeights=[16,546];assert.doesNotThrow(()=>C.validate(w),'the narrowest and widest column, the lowest and highest row');
+  for(const [field,size] of [['colWidths',23],['colWidths',2045],['rowHeights',15],['rowHeights',547]]){const v=make();v.sheets[0][field]=[size];assert.throws(()=>C.validate(v),new RegExp(field),field+' '+size);}});
+const T=require('../assets/toon.js');
+const handoff=()=>{const w=make(),s=w.sheets[0];s.cells={A1:{t:'s',v:'見積明細',s:{bold:true,fill:'#e2efda'}},A2:{t:'s',v:'00123',s:{numFmt:'@'}},B2:{t:'f',f:'=SUM(C2:D2)'},C2:{t:'n',v:3},D2:{t:'s',v:'a, "b"\n2行目'}};
+  s.merges=[{r1:5,c1:0,r2:5,c2:1},{r1:6,c1:0,r2:6,c2:1}];s.colWidths=[96,null,120];w.view={zoom:100,active:[1,2],selection:{r1:1,c1:2,r2:1,c2:2},scrollTop:0,scrollLeft:0};
+  return {schema:'excel-html-state/v1',workbookId:'test',baseRevision:'sha256:'+'0'.repeat(64),exportedAt:'2026-11-17T00:00:00.000Z',workbook:w};};
+test('the state text for the AI is TOON by default, between its first line and an end line, and reads back to the same state',()=>{const state=handoff(),text=C.stateText(state),lines=text.split('\n');
+  assert.equal(lines[0],'EXCEL_HTML_STATE_V1 TOON');assert.equal(lines.at(-1),'EXCEL_HTML_STATE_END');assert.equal(lines.slice(1,-1).join('\n'),T.encode(state),'the lines between are the TOON of the state');
+  assert.deepEqual(C.readStateText(text),state);assert.deepEqual(C.readStateText('\ufeff'+text.replace(/\n/g,'\r\n')+'\r\n'),state,'a BOM, CRLF line ends and a final line end are accepted');});
+test('the JSON state text is the same as before and is still read',()=>{const state=handoff(),json=C.stateText(state,'json');
+  assert.equal(json,'EXCEL_HTML_STATE_V1\n'+JSON.stringify(state,null,2));assert.deepEqual(C.readStateText(json),state);assert.ok(C.stateText(state).length<json.length,'TOON is the shorter text');});
+test('a state text cut short, changed inside, or without its first line is refused rather than read in part',()=>{const state=handoff(),text=C.stateText(state),lines=text.split('\n');
+  for(let n=1;n<lines.length;n++)assert.throws(()=>C.readStateText(lines.slice(0,n).join('\n')),/EXCEL_HTML_STATE_END/,'the first '+n+' lines');
+  assert.throws(()=>C.readStateText(text.slice(0,-3)),/EXCEL_HTML_STATE_END/,'cut inside the end line');
+  const row=lines.findIndex(l=>/^ +5,0,5,1$/.test(l));assert.ok(row>0);assert.throws(()=>C.readStateText(lines.filter((_,i)=>i!==row).join('\n')),/TOON/,'a merge row taken out');
+  assert.throws(()=>C.readStateText(lines.slice(1).join('\n')),/EXCEL_HTML_STATE_V1で始まる/);assert.throws(()=>C.readStateText(text.replace('EXCEL_HTML_STATE_V1 TOON','EXCEL_HTML_STATE_V2 TOON')),/EXCEL_HTML_STATE_V1で始まる/);
+  const json=C.stateText(state,'json');assert.throws(()=>C.readStateText(json.slice(0,json.length/2)),/JSON/);});
+test('a selection of whole rows or whole columns is not widened by merged cells, as in Excel; any other range takes in every merged cell it touches',()=>{const s=make().sheets[0];s.merges=[C.range('A11:C12')];
+  assert.deepEqual(C.selectionArea(s,C.range('B1:B30')),C.range('B1:B30'),'whole column B');assert.deepEqual(C.selectionArea(s,C.range('A11:O11')),C.range('A11:O11'),'whole row 11');
+  assert.deepEqual(C.selectionArea(s,C.range('B10:B11')),C.range('A10:C12'),'a range of cells');
+  assert.equal(C.splitsMerge(s,C.range('B1:B30')),true,'column B holds only part of A11:C12');assert.equal(C.splitsMerge(s,C.range('A10:C12')),false);assert.equal(C.splitsMerge(s,C.range('D1:D30')),false);});
+test('copying a range that holds only part of a merged cell takes just that range as separate cells, as Excel does',()=>{const w=make(),s=w.sheets[0];
+  s.cells={A1:{t:'s',v:'題名'},B4:{t:'s',v:'品名'},A11:{t:'s',v:'結合セル'}};s.merges=[C.range('A1:B1'),C.range('A11:C12')];C.validate(w);
+  const d=C.rangeData(w,s,C.range('B1:B30'));assert.deepEqual([d.rows,d.cols,d.merges],[30,1,[]],'column B alone, with no merge');assert.equal(d.cells.A4.v,'品名');assert.equal(d.cells.A11.v,'','the part of A11:C12 is an empty cell');
+  const clip=C.clipboard(w,s,C.range('B1:B30'));assert.equal(clip.text.split('\r\n').length,30);assert.equal((clip.html.match(/<td[ >]/g)||[]).length,30,'every row has its cell, the hidden parts of merged cells included');assert.ok(!/colspan|rowspan/.test(clip.html),'no merge goes to Excel');assert.ok(!clip.html.includes('結合セル')&&!clip.html.includes('題名'),'values of merged cells outside the range stay out');
+  const md=C.markdown(w,s,C.range('B1:B4'));assert.ok(md.text.includes('品名')&&!md.text.includes('題名'));
+  const left=C.rangeData(w,s,C.range('A1:A2'));assert.deepEqual([left.cells.A1.v,left.merges],['題名',[]],'a merged cell whose top-left is in the range gives its value, unmerged');
+  assert.deepEqual(C.rangeData(w,s,C.range('A10:C12')).merges,[{r1:1,c1:0,r2:2,c2:2}],'a merged cell wholly inside the range stays merged');});

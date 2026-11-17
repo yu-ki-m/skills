@@ -3,17 +3,21 @@ import assert from 'node:assert/strict';
 import {existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {after, before, test} from 'node:test';
-import {blankBook, buildBook, embeddedBook, fixture, removeDir, runBuild, tempDir} from './lib/workbook.mjs';
+import {blankBook, buildBook, Core, embeddedBook, fixture, removeDir, runBuild, tempDir} from './lib/workbook.mjs';
 
 let dir;
 before(() => { dir = tempDir(); });
 after(() => removeDir(dir));
 
-/** A state text of 「AIに渡す」 for the HTML at htmlPath, after edit(workbook) changes a copy of its workbook. */
-function stateText(htmlPath, edit) {
+/**
+ * A state text of 「AIに渡す」 for the HTML at htmlPath, in format 'toon' (what the page gives by default) or 'json',
+ * after edit(workbook, state) changes a copy of its workbook or the state around it.
+ */
+function stateText(htmlPath, edit, format = 'toon') {
   const base = embeddedBook(htmlPath), workbook = structuredClone(base);
-  edit(workbook);
-  return 'EXCEL_HTML_STATE_V1\n' + JSON.stringify({schema: 'excel-html-state/v1', workbookId: base.id, baseRevision: base.revision, exportedAt: new Date().toISOString(), workbook}, null, 2);
+  const state = {schema: 'excel-html-state/v1', workbookId: base.id, baseRevision: base.revision, exportedAt: new Date().toISOString(), workbook};
+  edit(workbook, state);
+  return Core.stateText(state, format);
 }
 const newFolder = name => { const folder = join(dir, name); mkdirSync(folder, {recursive: true}); return folder; };
 const listHtml = folder => readdirSync(folder).filter(n => n.endsWith('.html')).sort();
@@ -35,7 +39,7 @@ test('ブックJSONから、データを埋め込んだ単一のHTMLを作り、
 
 test('セルの文字や題名は、埋め込み先のスクリプトやHTMLを壊さない', () => {
   const book = blankBook({title: '<b>題名</b> & "x"', sheet: {cells: {
-    A1: {t: 's', v: '</script><script>alert(1)</script>'}, A2: {t: 's', v: '/*__APP__*/ /*__CORE__*/ __TITLE__'}, A3: {t: 's', v: '行区切り 段落区切り '},
+    A1: {t: 's', v: '</script><script>alert(1)</script>'}, A2: {t: 's', v: '/*__APP__*/ /*__CORE__*/ /*__TOON__*/ __TITLE__'}, A3: {t: 's', v: '行区切り 段落区切り '},
   }}});
   const html = buildBook(book, dir, 'escape.html');
   const source = readFileSync(html, 'utf8');
@@ -43,7 +47,7 @@ test('セルの文字や題名は、埋め込み先のスクリプトやHTMLを�
   assert.ok(!source.includes('</script><script>alert(1)'), '値の </script> で埋め込みが終わらない');
   const cells = embeddedBook(html).sheets[0].cells;
   assert.equal(cells.A1.v, '</script><script>alert(1)</script>');
-  assert.equal(cells.A2.v, '/*__APP__*/ /*__CORE__*/ __TITLE__', '置換の印に似た文字は置き換えない');
+  assert.equal(cells.A2.v, '/*__APP__*/ /*__CORE__*/ /*__TOON__*/ __TITLE__', '置換の印に似た文字は置き換えない');
   assert.equal(cells.A3.v, '行区切り 段落区切り ');
   assert.equal(source.split('window.ExcelHTMLCore,$=').length, 2, 'app.js は1回だけ埋め込む');
 });
@@ -69,28 +73,35 @@ test('検査を通らないブックは、エラーを出して何も書き出�
   assert.deepEqual(listHtml(folder), []);
 });
 
-test('状態テキストの反映：ID違い・途中で切れたテキスト・見出しのないテキストは拒み、元のファイルを変えない', () => {
-  const folder = newFolder('state');
-  const html = buildBook(fixture('book'), folder, '表.html');
-  const original = readFileSync(html, 'utf8');
-  const good = stateText(html, w => { w.sheets[0].cells.B4.v = '反映'; });
-  const cases = {
-    'ブックID違い': good.replace('"workbookId": "excel-html-test-fixture"', '"workbookId": "other"'),
-    '途中で切れた': good.slice(0, Math.floor(good.length / 2)),
-    '見出しなし': good.slice('EXCEL_HTML_STATE_V1\n'.length),
-  };
-  for (const [name, text] of Object.entries(cases)) {
-    writeFileSync(join(folder, 'state.txt'), text, 'utf8');
-    const result = runBuild(['--base', html, '--state', join(folder, 'state.txt')]);
-    assert.equal(result.status, 1, name);
-    assert.match(result.stderr, /^エラー: /, name);
-    assert.deepEqual(listHtml(folder), ['表.html'], name + 'では以前の内容のファイルも作らない');
-    assert.equal(readFileSync(html, 'utf8'), original, name);
-  }
-  writeFileSync(join(folder, 'state.txt'), good, 'utf8');
-  assert.equal(runBuild(['--base', html, '--state', join(folder, 'state.txt')]).status, 0);
-  assert.equal(embeddedBook(html).sheets[0].cells.B4.v, '反映');
-});
+for (const [format, label] of [['toon', 'TOON'], ['json', 'JSON']]) {
+  test(`状態テキスト（${label}）の反映：ID違い・途中で切れたテキスト・見出しのないテキストは拒み、元のファイルを変えない`, () => {
+    const folder = newFolder('state-' + format);
+    const html = buildBook(fixture('book'), folder, '表.html');
+    const original = readFileSync(html, 'utf8');
+    const good = stateText(html, w => { w.sheets[0].cells.B4.v = '反映'; }, format);
+    const lines = good.split('\n'), cut = format === 'toon' ? /EXCEL_HTML_STATE_END/ : /JSON/;
+    const cases = {
+      'ブックID違い': [stateText(html, (w, state) => { state.workbookId = 'other'; }, format), /ブックIDまたはリビジョンが一致しません/],
+      '途中で切れた': [good.slice(0, Math.floor(good.length / 2)), cut],
+      '行の境目で切れた': [lines.slice(0, Math.floor(lines.length / 2)).join('\n'), cut],
+      '最後の行が欠けた': [lines.slice(0, -1).join('\n'), cut],
+      '見出しなし': [lines.slice(1).join('\n'), /EXCEL_HTML_STATE_V1で始まる/],
+    };
+    for (const [name, [text, reason]] of Object.entries(cases)) {
+      writeFileSync(join(folder, 'state.txt'), text, 'utf8');
+      const result = runBuild(['--base', html, '--state', join(folder, 'state.txt')]);
+      assert.equal(result.status, 1, name);
+      assert.match(result.stderr, /^エラー: /, name);
+      assert.match(result.stderr, reason, name);
+      assert.deepEqual(listHtml(folder), ['表.html'], name + 'では以前の内容のファイルも作らない');
+      assert.equal(readFileSync(html, 'utf8'), original, name);
+    }
+    writeFileSync(join(folder, 'state.txt'), good, 'utf8');
+    const applied = runBuild(['--base', html, '--state', join(folder, 'state.txt')]);
+    assert.equal(applied.status, 0, applied.stderr);
+    assert.equal(embeddedBook(html).sheets[0].cells.B4.v, '反映');
+  });
+}
 
 test('生成後に中のデータを書き換えたHTMLは、反映の元として受け付けない', () => {
   const folder = newFolder('tampered');

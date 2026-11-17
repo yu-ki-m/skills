@@ -46,7 +46,8 @@
 - `colWidths` は列幅、`rowHeights` は行の高さで、CSSピクセルで書く。
   既定は列幅96px、行の高さ22px。
   `null` や省略は既定になる。
-  幅は24〜800、高さは16〜600。
+  幅は24〜2044、高さは16〜546。
+  上限は、Excelで設定できる最大の列幅と行の高さに合わせている。
 - `merges` は結合で、両端を含む0始まりの矩形（`r1,c1,r2,c2`）。
   重複は不可。
   左上以外のセルに値を置かない。
@@ -145,13 +146,79 @@ Excelに貼ると、参照先がすべてコピー範囲の中にある数式は
 
 ## 編集状態（AIに渡すテキスト）
 
+「AIに渡す」は、既定でTOONの形式で書き出す。
+1行目の `EXCEL_HTML_STATE_V1 TOON` で形式を示し、最後の行の `EXCEL_HTML_STATE_END` で、テキストが最後まであることを示す。
+その間の行は、下のJSONと同じオブジェクトを、TOON（仕様4.4、[toon-format/spec](https://github.com/toon-format/spec)）で書いたものである。
+
+```text
+EXCEL_HTML_STATE_V1 TOON
+schema: excel-html-state/v1
+workbookId: estimate-2026-acme
+baseRevision: "sha256:…"
+exportedAt: "2026-11-17T01:23:45.678Z"
+workbook:
+  schema: excel-html-workbook/v1
+  id: estimate-2026-acme
+  revision: "sha256:…"
+  title: 見積明細
+  activeSheet: main
+  sheets[1]:
+    - id: main
+      name: 見積
+      rows: 60
+      cols: 12
+      colWidths[5]: 90,220,70,100,110
+      rowHeights[4]: 32,24,24,44
+      merges[1]{r1,c1,r2,c2}:
+        0,0,0,4
+      cells:
+        A1:
+          t: s
+          v: 見積明細
+          s:
+            bold: true
+            size: 16
+            align: center
+        A4:
+          t: s
+          v: "00123"
+          s:
+            numFmt: @
+        B4:
+          t: s
+          v: "保守作業\n（月額）"
+          s:
+            wrap: true
+        E4:
+          t: f
+          f: =C4*D4
+          s:
+            numFmt: "¥#,##0"
+EXCEL_HTML_STATE_END
+```
+
+TOONの読み方は次のとおりである。
+
+- `名前: 値` の1行が1つの項目で、行頭の字下げ（空白2つで1段）が入れ子を表す。
+- `colWidths[5]: 90,220,…` は要素が5つの配列である。
+  `merges[1]{r1,c1,r2,c2}:` は、同じ項目名を持つオブジェクトを表にしたもので、次の行から1行が1要素になる。
+  `[ ]` の数と実際の要素の数が合わないテキストは、途中で切れたか書き換えられたものとして拒む。
+- `- ` で始まる行は、配列の要素である。
+  要素がオブジェクトなら、最初の項目を `- ` の行に書き、残りの項目をその下にそろえて書く。
+- 数・`true`・`false`・`null` と区別がつかない文字列や、`:` `,` `"` `#` などを含む文字列は、`"00123"` のように引用符で囲む。
+  改行は `\n`、引用符は `\"` と書く。
+
+ダイアログの「形式」でJSONを選ぶと、これまでと同じJSONで書き出す。
+
 ```text
 EXCEL_HTML_STATE_V1
 {"schema":"excel-html-state/v1","workbookId":"…","baseRevision":"sha256:…","exportedAt":"…","workbook":{…ブック全体…}}
 ```
 
+`build.py --state` は、どちらの形式も読む。
 差分ではなく、ブック全体の写しである。
 値、型、数式、書式、空セル、結合、寸法、シートの順、表示位置を含む。
 画像を貼った場合は、使われている画像の中身（`assets`）も入るので、数MBになることがある。
 途中で切れたテキストは拒否し、推測で補わない。
+TOONでは、最後の行がないテキストと、`[ ]` の数が合わないテキストを、途中で切れたものとして扱う。
 更新しないセルや、知らない業務用の項目を削除しない。

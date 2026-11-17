@@ -132,6 +132,31 @@ test('1つのセルの値を範囲に貼ると、範囲のすべてのセルに�
   assert.deepEqual(['G4', 'H4', 'G5', 'H5'].map(a => cells[a].v), [7, 7, 7, 7]);
 });
 
+test('見出しで選んだ列に結合セルの一部だけが入るときは、Excelと同じく、コピーは選んだ列だけを写し、切り取りは知らせて止める', async t => {
+  const x = await env.open(t, book);
+  // A11:C12 is merged across columns A to C; column B holds only a part of it.
+  await x.click('#grid th[data-col="1"]');
+  const copied = await x.copy();
+  const expected = await expectedClipboard(x, 'B1:B30');
+  assert.equal(copied.html, expected.html);
+  assert.equal(copied.text, expected.text);
+  const lines = copied.text.split('\r\n');
+  assert.equal(lines.length, 30, '30行');
+  assert.ok(lines.every(line => !line.includes('\t')), '列Bの1列だけ');
+  assert.equal(lines[3], '保守作業');
+  assert.equal(lines[10], '', 'B11 は結合セルの一部なので、空のセルとして写す');
+  assert.ok(!/colspan|rowspan/.test(copied.html), '一部しか入らない結合は写さない');
+  assert.equal(copied.html.match(/<td[ >]/g)?.length, 30, 'どの行にもセルが1つずつある（結合で隠れていた B11・B12 も空のセルとして入る）');
+  assert.ok(!copied.html.includes('結合セル'), '結合セルの値（A11）は写さない');
+  const cut = await x.cut();
+  assert.equal(cut.prevented, true, 'ブラウザーに切り取りもさせない');
+  assert.deepEqual([cut.html, cut.text], ['', ''], 'クリップボードに何も渡さない');
+  const dialog = await x.dialog();
+  assert.equal(dialog?.body, 'この操作は結合したセルには行えません。');
+  await x.answer('ok');
+  assert.equal(await x.text('B4'), '保守作業', '値を消さない');
+});
+
 test('切り取り（Ctrl+X）は、中身をクリップボードに渡してから値を消す', async t => {
   const x = await env.open(t, book);
   await x.select('B4:C4');

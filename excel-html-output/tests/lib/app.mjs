@@ -7,7 +7,7 @@
 import {after, before} from 'node:test';
 import {pathToFileURL} from 'node:url';
 import {launch} from './browser.mjs';
-import {buildBook, removeDir, tempDir} from './workbook.mjs';
+import {buildBook, Core, removeDir, tempDir} from './workbook.mjs';
 
 const INIT_SCRIPT = `(() => {
   const store = {items: [], writes: 0, legacy: [], denyRead: false, denyWrite: false};
@@ -292,7 +292,10 @@ export class ExcelPage {
     }
   }
 
-  /** The state text of 「AIに渡す」, parsed: {raw, state, book, sheet(id)}. */
+  /**
+   * The state text of 「AIに渡す」 in the format the dialog shows (TOON unless JSON was chosen), read the way build.py
+   * reads it (assets/core.js readStateText): {raw, state, book, sheet(id)}.
+   */
   async state() {
     const raw = await this.evaluate(() => {
       document.getElementById('handoff').click();
@@ -300,9 +303,7 @@ export class ExcelPage {
       document.getElementById('handoff-dialog').close();
       return text;
     });
-    const newline = raw.indexOf('\n');
-    if (raw.slice(0, newline) !== 'EXCEL_HTML_STATE_V1') throw new Error('状態テキストの先頭が EXCEL_HTML_STATE_V1 ではありません');
-    const state = JSON.parse(raw.slice(newline + 1));
+    const state = Core.readStateText(raw);
     const book = state.workbook;
     return {raw, state, book, sheet: (id = book.activeSheet) => book.sheets.find(s => s.id === id)};
   }
