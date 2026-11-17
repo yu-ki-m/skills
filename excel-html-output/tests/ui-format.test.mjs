@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {rgb, useBrowser} from './lib/app.mjs';
-import {fixture} from './lib/workbook.mjs';
+import {blankBook, fixture} from './lib/workbook.mjs';
 
 const env = useBrowser();
 const book = fixture('book');
@@ -432,6 +432,63 @@ test('右のセルが空いていれば文字ははみ出して表示され、�
   assert.equal(await x.nameBox(), 'B1', 'はみ出した文字はクリックを受け取らない');
 });
 
+test('折り返しを無効にしたセルは、Excelと同じく改行を描かずに1行で表示して右の空いたセルへはみ出し、はみ出した下のセルはどれも選べる', async t => {
+  const long = '折り返しを途中で無効にした長い文字列がここにあります';
+  const wholeTextShown = (x, addr) => x.evaluate(a => { const span = document.querySelector(`#cell-${a} .cell-text`); return span.scrollWidth <= span.clientWidth + 1; }, addr);
+  // The first line is long too, so that the one-line text needs more columns than its longest line alone.
+  const first = '1行目にも長めの文字を入れておく';
+  const x = await env.open(t, blankBook({sheet: {cells: {A5: {t: 's', v: first + '\n' + long, s: {wrap: true}}}}}));
+  await x.clickCell('A5');
+  await x.click('#ribbon-home [data-style="wrap"]');
+  const a5 = await x.cell('A5');
+  assert.equal(a5.text, first + long, '改行は描かない');
+  assert.ok(a5.classes.includes('ov'), '右の空いたセルへはみ出す');
+  assert.ok(a5.textRect.width > a5.rect.width * 3, '数列先まで1行で描く');
+  assert.ok(await wholeTextShown(x, 'A5'), '1行にした文字が、最後まで切れずに見える');
+  assert.equal(await x.formula(), first + '\n' + long, '値の改行は残り、数式バーには出る');
+  assert.equal((await x.cells()).A5.v, first + '\n' + long);
+  for (const addr of ['B5', 'C5', 'D5']) {
+    await x.clickCell(addr);
+    assert.equal(await x.nameBox(), addr, `はみ出した文字の下の ${addr} もクリックで選べる`);
+  }
+  await x.dblclickCell('C5');
+  assert.equal(await x.editing(), true, 'はみ出した文字の下のセルも、ダブルクリックで編集できる');
+  await x.press('Escape');
+  await x.clickCell('A5');
+  await x.press('ArrowRight');
+  assert.equal(await x.nameBox(), 'B5', '矢印キーでも、はみ出した文字の下のセルへ移れる');
+  // Typed with Alt+Enter: the wrap turns on by itself, as in Excel, and turning it off gives one line again.
+  await x.clickCell('A8');
+  await x.press('F2');
+  await x.type('入力中に');
+  await x.press('Alt+Enter');
+  await x.type(long);
+  await x.press('Enter');
+  await x.clickCell('A8');
+  assert.equal((await x.cells()).A8.s.wrap, true);
+  await x.click('#ribbon-home [data-style="wrap"]');
+  const a8 = await x.cell('A8');
+  assert.equal(a8.text, '入力中に' + long);
+  assert.ok(a8.classes.includes('ov'));
+  assert.ok(await wholeTextShown(x, 'A8'));
+  await x.clickCell('B8');
+  assert.equal(await x.nameBox(), 'B8');
+});
+
+test('折り返しなしのセルの改行は、行の高さと列幅の自動調整でも、改行を除いた1行として測る（Excelと同じ）', async t => {
+  const x = await env.open(t, blankBook({sheet: {cells: {A2: {t: 's', v: '短い\n文字列'}, B2: {t: 's', v: '短い文字列'}}, rowHeights: [null, 60]}}));
+  await x.click('#grid th[data-row="1"]');
+  await x.action('autofit-row');
+  let sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.rowHeights[1], 22, '改行があっても1行分の高さ');
+  await x.click('#grid thead th[data-col="0"]');
+  await x.action('autofit-col');
+  await x.click('#grid thead th[data-col="1"]');
+  await x.action('autofit-col');
+  sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.colWidths[0], sheet.colWidths[1], '改行を除いた「短い文字列」と同じ幅');
+});
+
 test('結合セルを横切る位置では枠を固定せず、理由を知らせる', async t => {
   const x = await env.open(t, book);
   await x.clickCell('C3');
@@ -453,6 +510,10 @@ test('固定した列の文字は、Excelと同じく固定の境目を越えて
   assert.ok(a1.textRect.left + a1.textRect.width <= d1.rect.left + 1, '元のセルの文字は固定の境目で切れる');
   assert.equal(a1.style.zIndex, '7', 'はみ出す固定セルは、白く塗った隣の固定セルより手前（6 + 1）');
   assert.equal(d1.style.zIndex, '5', '続きを描く行だけ固定のセルも 1 つ手前（4 + 1）');
+  for (const addr of ['B1', 'D1', 'E1']) {
+    await x.clickCell(addr);
+    assert.equal(await x.nameBox(), addr, `固定の境目の前後で、はみ出した文字の下の ${addr} も選べる`);
+  }
 });
 
 test('狭い列の数値は、表示形式があれば #### になり、標準なら桁を減らして表示する', async t => {

@@ -15,7 +15,7 @@ test('行の挿入で下の行がずれ、数式の参照・結合・合計が�
   await x.action('insert-row');
   const sheet = (await x.state()).sheet('main');
   assert.equal(sheet.rows, 31);
-  assert.equal(sheet.cells.A5, undefined, '挿入した行は空');
+  assert.deepEqual(sheet.cells.A5, {t: 's', v: '', s: {numFmt: '@'}}, '挿入した行は空で、上の行の書式を受け継ぐ');
   assert.equal(sheet.cells.A6.v, '00124');
   assert.equal(sheet.cells.E6.f, '=C6*D6');
   assert.equal(sheet.cells.E8.f, '=SUM(E4:E7)', '範囲の終わりが下へ広がる');
@@ -52,7 +52,7 @@ test('列の挿入と削除で右の列がずれ、数式と列幅が追従す�
   assert.equal(sheet.cols, 11);
   assert.equal(sheet.cells.C4.v, '保守作業');
   assert.equal(sheet.cells.F4.f, '=D4*E4');
-  assert.equal(sheet.colWidths[1], null, '挿入した列は既定の幅');
+  assert.equal(sheet.colWidths[1], 96, '挿入した列は左のA列の幅を受け継ぐ');
   assert.equal(sheet.colWidths[2], 120, 'B列の幅は C列へ移る');
   assert.equal(await x.text('F9'), '¥83,600');
   await x.clickCell('B4');
@@ -62,6 +62,138 @@ test('列の挿入と削除で右の列がずれ、数式と列幅が追従す�
   assert.equal(sheet.cols, 10);
   assert.equal(sheet.cells.B4.v, '保守作業');
   assert.equal(sheet.cells.E4.f, '=C4*D4');
+});
+
+const content = (sheet, addr) => sheet.cells[addr]?.f ?? sheet.cells[addr]?.v ?? '';
+const openContextMenu = async (x, selector) => {
+  await x.click(selector, {button: 'right'});
+  await x.waitFor(() => !document.getElementById('context-menu').hidden, {message: '右クリックメニューの表示'});
+};
+
+test('列見出し・行見出しを右クリックして挿入すると、選んでいたセルではなく、右クリックした列・行の位置に入る', async t => {
+  const x = await env.open(t, book);
+  await x.clickCell('E5');
+  await openContextMenu(x, '#grid thead th[data-col="2"]');
+  assert.equal(await x.nameBox(), 'C1:C30', 'Excelと同じく、右クリックした列を選ぶ');
+  await x.click('#context-menu [data-action="insert-col"]');
+  let sheet = (await x.state()).sheet('main');
+  assert.deepEqual(['C4', 'D4', 'E4', 'F4'].map(a => content(sheet, a)), ['', 3, 12000, '=D4*E4'], 'C列に空の列が入り、元のC列から右がずれる');
+  await x.clickCell('E9');
+  await openContextMenu(x, '#grid th[data-row="4"]');
+  assert.equal(await x.nameBox(), 'A5:K5', '右クリックした行を選ぶ');
+  await x.click('#context-menu [data-action="insert-row"]');
+  sheet = (await x.state()).sheet('main');
+  assert.deepEqual(['A5', 'A6'].map(a => content(sheet, a)), ['', '00124'], '5行目に空の行が入り、元の5行目から下がずれる');
+  await x.click('#grid thead th[data-col="1"]');
+  await x.click('#grid thead th[data-col="3"]', {shift: true});
+  await openContextMenu(x, '#grid thead th[data-col="2"]');
+  assert.equal(await x.nameBox(), 'B1:D31', '選んでいた列の中で右クリックしたときは、選択を変えない');
+  await x.click('#context-menu [data-action="insert-col"]');
+  assert.equal((await x.state()).sheet('main').cols, 14, '選んでいた3列分が入る');
+});
+
+test('列・行を挿入・削除しても、選んでいた範囲は同じ番地のまま残り、結合した題名にかかっても広がらない', async t => {
+  const x = await env.open(t, blankBook({sheet: {cells: {A1: {t: 's', v: '題名'}}, merges: [{r1: 0, c1: 0, r2: 0, c2: 4}]}}));
+  await x.click('#grid thead th[data-col="2"]');
+  await x.action('insert-col');
+  assert.equal(await x.nameBox(), 'C1:C30', 'Excelと同じく、挿入した列を選んだまま');
+  await x.action('insert-col');
+  let sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.cols, 14, '続けて押すと、同じ位置にもう1列だけ入る');
+  assert.deepEqual(sheet.merges, [{r1: 0, c1: 0, r2: 0, c2: 6}], '題名の結合は、入った列の分だけ広がる');
+  await x.action('delete-col');
+  await x.answer('ok');
+  assert.equal(await x.nameBox(), 'C1:C30', '削除した後も同じ列を選んだまま');
+  await x.select('B4:C5');
+  await x.action('insert-row');
+  assert.equal(await x.nameBox(), 'B4:C5');
+  sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.rows, 32);
+});
+
+test('全列にかかる題名の結合がある表でも、見出しで選んだ1列の削除は1列ずつ行い、すべての列の削除として止めない', async t => {
+  const x = await env.open(t, blankBook({sheet: {cells: {A1: {t: 's', v: '題名'}}, merges: [{r1: 0, c1: 0, r2: 0, c2: 11}]}}));
+  await x.click('#grid thead th[data-col="2"]');
+  for (const cols of [11, 10]) {
+    await x.action('delete-col');
+    assert.equal((await x.dialog())?.title, '選択した列を削除', '「すべての行または列は削除できません」ではなく、削除の確認になる');
+    await x.answer('ok');
+    assert.equal((await x.state()).sheet('main').cols, cols, '1列だけ消える');
+    assert.equal(await x.nameBox(), 'C1:C30', '削除した後も列Cを選んだまま');
+  }
+  assert.deepEqual((await x.state()).sheet('main').merges, [{r1: 0, c1: 0, r2: 0, c2: 9}], '題名の結合は、削除した列の分だけ狭まる');
+});
+
+test('挿入した列は、左の列の書式と列幅を受け継ぎ、罫線は両隣に同じ線があるときだけ続き、A列に挿入した列は既定のまま（Excelと同じ）', async t => {
+  const x = await env.open(t, book);
+  await x.click('#grid thead th[data-col="2"]');
+  await x.action('insert-col');
+  let sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.colWidths[2], 120, '左のB列の幅');
+  assert.deepEqual(sheet.cells.C3, {t: 's', v: '', s: {bold: true, fill: '#e2efda', borderBottom: '2px solid #217346'}}, '見出しの太字・塗りと、両隣にある下罫線');
+  assert.equal(sheet.cells.C4, undefined, '左のB4に書式がないので、書式なし');
+  await x.click('#grid thead th[data-col="6"]');
+  await x.action('insert-col');
+  sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.colWidths[6], 110, '左の「金額」の列の幅');
+  assert.deepEqual(sheet.cells.G3, {t: 's', v: '', s: {bold: true, fill: '#e2efda'}}, '表の右端では、右隣にない下罫線は続けない');
+  assert.deepEqual(sheet.cells.G4, {t: 's', v: '', s: {numFmt: '¥#,##0'}}, '値や数式は写さず、表示形式だけ');
+  assert.equal(await x.text('G4'), '');
+  await x.click('#grid thead th[data-col="0"]');
+  await x.action('insert-col');
+  sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.colWidths[0], null, 'A列に入れた列は既定の幅');
+  assert.equal(sheet.cells.A3, undefined, 'A列に入れた列は書式なし');
+  assert.equal(sheet.cells.B3.v, '品番');
+});
+
+test('挿入した行は、上の行の書式と行の高さを受け継ぎ、1行目に挿入した行は既定のまま（Excelと同じ）', async t => {
+  const x = await env.open(t, book);
+  await x.click('#grid th[data-row="3"]');
+  await x.action('insert-row');
+  let sheet = (await x.state()).sheet('main');
+  assert.deepEqual(sheet.cells.A4, {t: 's', v: '', s: {bold: true, fill: '#e2efda'}}, '見出しの太字・塗りを受け継ぎ、見出しの下罫線は見出しの行に残る');
+  assert.equal(sheet.cells.A5.v, '00123');
+  await x.click('#grid th[data-row="1"]');
+  await x.action('insert-row');
+  sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.rowHeights[1], 30, '上の1行目の高さ');
+  assert.deepEqual(sheet.cells.A2, {t: 's', v: '', s: {bold: true, size: 14}}, '題名の文字は写さず、書式だけ');
+  await x.click('#grid th[data-row="0"]');
+  await x.action('insert-row');
+  sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.rowHeights[0], null, '1行目に入れた行は既定の高さ');
+  assert.equal(sheet.cells.A1, undefined, '1行目に入れた行は書式なし');
+  assert.equal(sheet.cells.A2.v, 'テスト用の明細表（右の空いたセルへはみ出す長い題名）');
+});
+
+test('結合セルの右や下に挿入した列・行は、結合セルの塗りや太字を受け継ぐが、罫線は受け継がない（Excelと同じ）', async t => {
+  const line = '1px solid #000000';
+  const merged = {bold: true, fill: '#fff2cc', align: 'center', borderTop: line, borderRight: line, borderBottom: line, borderLeft: line};
+  const sheetWithMerge = blankBook({sheet: {cells: {B2: {t: 's', v: '結合', s: merged}}, merges: [{r1: 1, c1: 1, r2: 2, c2: 2}]}});
+  const x = await env.open(t, sheetWithMerge);
+  await x.click('#grid thead th[data-col="3"]');
+  await x.action('insert-col');
+  await x.click('#grid th[data-row="3"]');
+  await x.action('insert-row');
+  const sheet = (await x.state()).sheet('main');
+  const inherited = {bold: true, fill: '#fff2cc', align: 'center'};
+  assert.deepEqual(['D2', 'D3', 'B4', 'C4', 'D4'].map(a => sheet.cells[a]?.s), Array(5).fill(inherited));
+  assert.deepEqual(sheet.merges, [{r1: 1, c1: 1, r2: 2, c2: 2}], '結合の外に入れた列・行は、結合を変えない');
+  // Inside the merged area the merged cell grows, and its hidden cells stay empty.
+  const y = await env.open(t, sheetWithMerge);
+  await y.click('#grid thead th[data-col="2"]');
+  await y.action('insert-col');
+  const grown = (await y.state()).sheet('main');
+  assert.deepEqual(grown.merges, [{r1: 1, c1: 1, r2: 2, c2: 3}]);
+  assert.deepEqual(Object.keys(grown.cells), ['B2'], '結合の中に入った列には、隠れたセルを作らない');
+  // Between a merged cell with an outline and a bordered row below it: the new row goes on with the outline only.
+  const box = {borderTop: line, borderRight: line, borderBottom: line, borderLeft: line};
+  const z = await env.open(t, blankBook({sheet: {cells: {B2: {t: 's', v: '結合', s: box}, B4: {t: 's', v: '', s: box}, C4: {t: 's', v: '', s: box}}, merges: [{r1: 1, c1: 1, r2: 2, c2: 2}]}}));
+  await z.click('#grid th[data-row="3"]');
+  await z.action('insert-row');
+  const below = (await z.state()).sheet('main');
+  assert.deepEqual([below.cells.B4?.s, below.cells.C4?.s], [{borderLeft: line}, {borderRight: line}], '結合セルの外枠の縦線だけが続き、結合セルの中にあたる境目の線は入らない');
 });
 
 test('すべての行の削除と、シートの上限（100列）を超える列の挿入は、理由を知らせて行わない', async t => {

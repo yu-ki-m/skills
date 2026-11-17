@@ -40,7 +40,20 @@ test('Ctrl+S で、ブック全体と表示位置を含む状態テキストを�
   assert.deepEqual(state.workbook.view.selection, {r1: 3, c1: 2, r2: 4, c2: 3}, '選択範囲も渡す');
   assert.deepEqual(state.workbook.view.active, [3, 2]);
   assert.equal(state.workbook.sheets.length, 2, '全シートを渡す');
-  assert.match(await x.textOf('#handoff-result'), /このテキストだけで元HTMLは更新されません/);
+});
+
+test('ダイアログには、渡し方の指示と形式の名前だけを出す', async t => {
+  const x = await env.open(t, book);
+  await x.click('#handoff');
+  await x.waitDialog('handoff-dialog');
+  const shown = await x.evaluate(() => ({
+    guide: document.querySelector('#handoff-dialog p').textContent,
+    formats: [...document.querySelectorAll('#handoff-dialog .handoff-format label')].map(label => label.textContent),
+    result: document.querySelector('#handoff-result').textContent,
+  }));
+  assert.equal(shown.guide, '下のテキストと元のHTMLをClaude Codeに渡し、「この編集状態を反映してHTMLを再生成して」と伝えてください。');
+  assert.deepEqual(shown.formats, ['TOON', 'JSON'], '形式の名前に、良し悪しや既定かどうかを書き添えない');
+  assert.equal(shown.result, '', '開いただけでは、テキストの下に何も出さない');
 });
 
 test('形式で JSON を選ぶと同じ状態をJSONで出し、コピーもJSONになる。TOON に戻すと元のテキストに戻る', async t => {
@@ -54,7 +67,6 @@ test('形式で JSON を選ぶと同じ状態をJSONで出し、コピーもJSON
   const json = await x.value('handoff-text');
   assert.ok(json.startsWith('EXCEL_HTML_STATE_V1\n{'), '1行目の後はJSON');
   assert.deepEqual(JSON.parse(json.slice(json.indexOf('\n') + 1)), Core.readStateText(toon), 'TOON と同じ状態（書き出した時刻も同じ）');
-  assert.ok(toon.length < json.length, 'TOON の方が短い');
   await x.click('#copy-state');
   await x.waitFor(() => window.__testClipboard.writes > 0, {message: '状態テキストのコピー'});
   const [entry] = await x.clipboard();
@@ -109,7 +121,7 @@ test('「テキストをコピー」は状態テキストをクリップボー�
   const [entry] = await x.clipboard();
   assert.equal(entry.text, await x.value('handoff-text'));
   assert.equal(await x.textOf('#dirty-state'), '編集状態をコピー済み');
-  assert.match(await x.textOf('#handoff-result'), /編集状態をコピーしました/);
+  assert.equal(await x.textOf('#handoff-result'), '編集状態をコピーしました');
   assert.equal(await beforeUnloadBlocked(x), false);
 });
 
@@ -125,6 +137,7 @@ test('「テキストをエクスポート」は、ブック名-edits.txt とい
   assert.equal(file.suggestedFilename, 'テスト用ブック-edits.txt');
   assert.equal(readFileSync(file.path, 'utf8'), await x.value('handoff-text'));
   assert.equal(await x.textOf('#dirty-state'), '編集状態を書き出し済み');
+  assert.equal(await x.textOf('#handoff-result'), 'テキストのダウンロードを開始しました');
   assert.equal(await beforeUnloadBlocked(x), false);
 });
 

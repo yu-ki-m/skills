@@ -77,7 +77,7 @@ test('このシートからコピーした範囲を貼ると、値・相対参�
   let cells = await x.cells();
   assert.deepEqual([cells.G4.f, cells.G6.f], ['=E4*F4', '=E6*F6'], 'Excelと同じく、参照が貼った位置に合わせてずれる');
   assert.equal(cells.G4.s.numFmt, '¥#,##0');
-  assert.equal(await x.status(), '値・数式・書式・結合を貼り付けました');
+  assert.equal(await x.status(), '貼り付けました');
   await x.clickCell('A11');
   const merged = await x.copy();
   await x.clickCell('F14');
@@ -107,7 +107,7 @@ test('タブ区切りの文字を貼ると、型を推定して入り、引用�
   assert.deepEqual(['G20', 'H20', 'G21', 'H21', 'G22', 'H22', 'G23', 'H23'].map(a => [cells[a].t, cells[a].v]), [
     ['s', '品番'], ['s', '数量'], ['s', '00777'], ['n', 5], ['b', true], ['s', '1/2'], ['s', 'a\tb'], ['s', '1行目\n2行目'],
   ]);
-  assert.match(await x.status(), /貼り付けました。Excelなど外部からの値は/);
+  assert.equal(await x.status(), '貼り付けました。Excelなど外部からの値は、コピー元に表示されていた値になります。');
 });
 
 test('ExcelでコピーしたHTMLを貼ると、表示形式・太字・色・塗り・罫線・配置と、表示されていた値が入る', async t => {

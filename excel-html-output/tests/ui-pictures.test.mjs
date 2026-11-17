@@ -89,7 +89,7 @@ test('選んだ画像の Ctrl+C は画像だけをコピーし、Ctrl+X は画�
   assert.equal(stored.length, 1);
   assert.equal(stored[0].type, 'image/png');
   assert.ok(stored[0].size > 0);
-  assert.match(await x.status(), /画像をコピーしました/);
+  assert.equal(await x.status(), '画像をコピーしました');
   await x.cut();
   await x.waitFor(() => !document.querySelector('#pictures .picture'), {message: '切り取った画像の削除'});
   assert.equal(await x.status(), '画像を切り取りました');
