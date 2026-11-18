@@ -29,9 +29,8 @@ const CUSTOM_FORMAT = {'yyyy/mm/dd': 'yyyy/mm/dd', '¥#,##0': '"¥"#,##0'};
 const FIRST_CUSTOM_ID = 176; // Japanese Excel numbers its own custom formats from 176 on.
 const BORDER = {'0.5px solid': 'hair', '1px solid': 'thin', '2px solid': 'medium', '3px solid': 'thick', '1px dashed': 'dashed',
   '2px dashed': 'mediumDashed', '1px dotted': 'dotted', '3px double': 'double'};
-// Japanese Excel names these fonts in Japanese; the English names are the same fonts.
-const JAPANESE_NAME = {'Yu Gothic': '游ゴシック', 'Yu Mincho': '游明朝', 'Meiryo': 'メイリオ', 'MS Gothic': 'ＭＳ ゴシック',
-  'MS PGothic': 'ＭＳ Ｐゴシック', 'MS Mincho': 'ＭＳ 明朝', 'MS PMincho': 'ＭＳ Ｐ明朝'};
+// Japanese Excel names these fonts in Japanese; the English names (the page's) are the same fonts.
+const JAPANESE_NAME = Object.fromEntries(Object.entries(C.FONT_ALIAS).map(([japanese, english]) => [english, japanese]));
 // The Normal style's font. Column widths are counted in its widest digit, which is 8px at 96dpi (10px at 120dpi), so a
 // width of px / 8 gives the page's width at any display scaling. It stays Yu Gothic 11pt, as in Japanese Excel, whatever
 // the book's default style is; cells carry their own fonts.

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {after, before, test} from 'node:test';
-import {blankBook, buildBook, Core, embeddedBook, fixture, removeDir, runBuild, tempDir} from './lib/workbook.mjs';
+import {blankBook, buildBook, Core, embeddedBook, fixture, removeDir, runBuild, SKILL_ROOT, tempDir} from './lib/workbook.mjs';
 import {readXlsx} from './lib/xlsx.mjs';
 
 let dir;
@@ -224,4 +224,33 @@ test('--xlsx は --output・--extract-json と一緒には使えず、数式と�
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stderr, /^注意: .*A1.*=SUM\(A2:A3/m);
   assert.equal(xlsxOf(xlsx).sheets[0].cells.A1.value, '=SUM(A2:A3');
+});
+
+test('--from-xlsx は、Excelのファイルから表のHTMLを作り、移せなかったものを「注意:」で知らせる', () => {
+  const folder = newFolder('from-xlsx');
+  const html = join(folder, '見積.html');
+  const result = runBuild(['--from-xlsx', join(SKILL_ROOT, 'tests', 'fixtures', 'excel-made.xlsx'), '--output', html]);
+  assert.equal(result.status, 0, result.stderr);
+  const book = embeddedBook(html);
+  assert.deepEqual(book.sheets.map(s => s.name), ['見積', '単価表']);
+  assert.equal(book.sheets[0].cells.E9.f, '=E7+E8');
+  assert.match(result.stderr, /^注意: シート「見積」：次の数式は、HTMLで計算できないので/m);
+  assert.match(result.stderr, /^注意: シート「見積」：条件付き書式は移せない/m);
+  const json = join(folder, 'book.json');
+  const extracted = runBuild(['--from-xlsx', join(SKILL_ROOT, 'tests', 'fixtures', 'excel-made.xlsx'), '--output', json, '--extract-json']);
+  assert.equal(extracted.status, 0, extracted.stderr);
+  assert.equal(JSON.parse(readFileSync(json, 'utf8')).sheets[0].cells.A1.v, '御見積書', '--extract-json なら読み込んだ表をJSONで書く');
+});
+
+test('--from-xlsx は他の入力と一緒には使えず、xlsx として読めないファイルでは理由を出して止まる', () => {
+  const folder = newFolder('from-xlsx-bad');
+  writeFileSync(join(folder, 'b.json'), JSON.stringify(blankBook()), 'utf8');
+  const both = runBuild(['--from-xlsx', join(SKILL_ROOT, 'tests', 'fixtures', 'excel-made.xlsx'), '--input', join(folder, 'b.json'), '--output', join(folder, 'x.html')]);
+  assert.equal(both.status, 2);
+  assert.match(both.stderr, /--from-xlsx/);
+  writeFileSync(join(folder, 'not.xlsx'), 'これはxlsxではない', 'utf8');
+  const bad = runBuild(['--from-xlsx', join(folder, 'not.xlsx'), '--output', join(folder, 'x.html')]);
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /xlsx（ZIP）として読めません/);
+  assert.deepEqual(listHtml(folder), []);
 });

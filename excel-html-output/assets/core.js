@@ -401,6 +401,6 @@
       throw Error('状態テキストの最後の行が ' + STATE_END + ' ではありません。途中で切れているので、コピーし直したテキストか、エクスポートしたファイルを渡してください。');
     return TOON.decode(end > nl ? raw.slice(nl + 1, end) : '', {firstLine: 2});
   }
-  return {SCHEMA,SIZE_LIMITS,FORMATS,MSO_FORMAT,BORDER_XL,DEFAULT,stateText,readStateText,selectionArea,splitsMerge,xlCss,excelWouldConvert,blockFormula,generalAlign,
+  return {SCHEMA,SIZE_LIMITS,FORMATS,MSO_FORMAT,BORDER_XL,DEFAULT,FONT_ALIAS,stateText,readStateText,selectionArea,splitsMerge,xlCss,excelWouldConvert,blockFormula,generalAlign,
     fontCharset,cssUnescape,parseDecls,parseRules,cssHex,formatFromMso,borderFromCss,styleFromDecls,valueFromDisplay,clone,esc,colName,addr,coord,rect,range,within,overlap,same,each,get,style,mergeAt,expanded,validate,width,height,infer,raw,isErr,calculate,evalFormula,display,css,shiftFormula,rangeData,clipboard,markdown,parseTSV,paste};
 });

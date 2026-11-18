@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: html-from-excel-file
+expected_outcome: |
+  見積.xlsx の2シート（見積、単価表）が入った、画面で編集できる単一のHTMLが作業フォルダーにできている。
+  値・書式・列幅・結合・枠の固定はExcelの表示どおりで、合計などの数式は数式のまま入っている。
+  HTMLで計算できない数式（VLOOKUP、別のシートの参照）のセルは、Excelが保存していた値になっている。
+  移せなかったもの（コメント、入力規則、条件付き書式など）と値にした数式を、最後の報告でユーザーに伝えている。
+  元の 見積.xlsx は変わっておらず、Excelのファイルは新しく作っていない。
+context:
+  scaffold_script: place-files.sh

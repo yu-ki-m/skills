@@ -52,7 +52,11 @@ function Paste-At($xl, $path) {
   Save-Dump $xl $ws $path
 }
 
-function Build-Native($xl) {
+# NormalFromBook (used for xlsx files): the reference book's Normal style takes the book's default font, and a cell gets a
+# font of its own only where it differs. Empty cells then have the book's default font, as in the file, and Japanese
+# text in a Latin default font (Calibri) keeps one font name: set cell by cell, Excel reads such a cell's font back as no
+# single name (desktop Excel 16.0).
+function Build-Native($xl, [switch]$NormalFromBook) {
   $w = Get-Content -Raw -Encoding utf8 $Workbook | ConvertFrom-Json -AsHashtable
   $s = $w.sheets | Where-Object { $_.id -eq $Sheet } | Select-Object -First 1
   if (-not $s) { throw "sheet not found: $Sheet" }
@@ -65,6 +69,8 @@ function Build-Native($xl) {
   $coord = { param($a) $m = [regex]::Match($a, '^([A-Z]+)(\d+)$'); $c = 0; foreach ($ch in $m.Groups[1].Value.ToCharArray()) { $c = $c * 26 + [int]$ch - 64 }; @([int]$m.Groups[2].Value, $c) }
 
   $wb = $xl.Workbooks.Add(); $ws = $wb.Worksheets.Item(1)
+  $bookFont = & $styleOf @{}
+  if ($NormalFromBook) { foreach ($style in $wb.Styles) { if ($style.BuiltIn -and $style.Name -eq 'Normal') { $style.Font.Name = $bookFont.font; $style.Font.Size = [double]$bookFont.size } } }
   $scratch = $ws.Cells.Item(1048000, 16000)
   $probe = $ws.Columns.Item(16001); $probe.ColumnWidth = 10; $p10 = $probe.Width; $probe.ColumnWidth = 20; $p20 = $probe.Width
   $slope = ($p20 - $p10) / 10; $icpt = $p10 - 10 * $slope
@@ -92,7 +98,10 @@ function Build-Native($xl) {
       'b' { $x.Value2 = [bool]$cell.v }
       'f' { $x.Formula = $cell.f }
     }
-    $f = $fx.Font; $f.Name = $st.font; $f.Size = [double]$st.size; $f.Bold = $st.bold; $f.Italic = $st.italic
+    $f = $fx.Font
+    if (-not $NormalFromBook -or $st.font -ne $bookFont.font) { $f.Name = $st.font }
+    if (-not $NormalFromBook -or $st.size -ne $bookFont.size) { $f.Size = [double]$st.size }
+    $f.Bold = $st.bold; $f.Italic = $st.italic
     $f.Underline = $(if ($st.underline) { 2 } else { -4142 }); $f.Strikethrough = $st.strike; $f.Color = & $bgr $st.color
     if ($st.fill -ne 'none') { $fx.Interior.Color = & $bgr $st.fill }
     $fx.HorizontalAlignment = $ALIGN[$st.align]; $fx.VerticalAlignment = $VALIGN[$st.valign]; $fx.WrapText = $st.wrap
@@ -119,8 +128,9 @@ function Open-Xlsx($xl) {
   $active = $wb.ActiveSheet.Name
   $names = @(foreach ($s in $wb.Worksheets) { $s.Name })
   $ws = $wb.Worksheets.Item($SheetName); $ws.Activate(); $win = $wb.Windows.Item(1)
-  $pictures = @(foreach ($sh in $ws.Shapes) { [ordered]@{ name = $sh.Name; type = $sh.Type; topLeft = $sh.TopLeftCell.Address(0, 0)
-    left = $sh.Left; top = $sh.Top; width = $sh.Width; height = $sh.Height; placement = $sh.Placement } })
+  # Pictures only (msoPicture 13): a comment, a chart or a drawn shape is a shape too.
+  $pictures = @(foreach ($sh in $ws.Shapes) { if ($sh.Type -eq 13) { [ordered]@{ name = $sh.Name; type = $sh.Type; topLeft = $sh.TopLeftCell.Address(0, 0)
+    left = $sh.Left; top = $sh.Top; width = $sh.Width; height = $sh.Height; placement = $sh.Placement } } })
   # Reading the page setup asks the printer driver, which fails where no printer is installed; then it is left out.
   $page = try { $p = $ws.PageSetup; [ordered]@{ paperSize = $p.PaperSize; orientation = $p.Orientation; zoom = $p.Zoom; fitWide = $p.FitToPagesWide; fitTall = $p.FitToPagesTall } } catch { $null }
   $info = [ordered]@{ repairs = $repairs; activeSheet = $active; sheetNames = $names; page = $page; freeze = $win.FreezePanes; splitRow = $win.SplitRow
@@ -136,7 +146,7 @@ $xl.Visible = $false; $xl.DisplayAlerts = $false
 try {
   if ($Mode -eq 'xlsx') {
     Open-Xlsx $xl
-    $ws = Build-Native $xl
+    $ws = Build-Native $xl -NormalFromBook
     Save-Dump $xl $ws "$Out.native.json"
   } elseif ($Mode -eq 'native') {
     $ws = Build-Native $xl

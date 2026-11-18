@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Verify that an .xlsx file written by build.py --xlsx opens in desktop Excel as the same table.
+"""Verify, in desktop Excel, that an .xlsx file and the page's table are the same table.
 
-Give the same table as build.py was given (--input, or --base with or without --state) and the .xlsx file. For each sheet
-  1. builds the same cells natively in Excel from the workbook (the reference; the same builder as verify_excel_paste.py),
+Two uses:
+  - build.py --xlsx wrote the .xlsx from the table: give the same table as build.py was given (--input, or --base with
+    or without --state) and the .xlsx file.
+  - build.py --from-xlsx read the table from the .xlsx: add --source, and give the HTML it made (--base) or the JSON
+    (--input). What the reader replaced or left out on purpose, and reported, counts as an expected difference
+    (scripts/read_xlsx.cjs is run again on the file to know what that was); printing is not compared.
+
+For each sheet it
+  1. builds the same cells natively in Excel from the table (the reference; the same builder as verify_excel_paste.py),
   2. opens the .xlsx file read-only in the same hidden Excel,
   3. compares value, type, formula, number format, font, colours, fill, alignment, wrap, indent, merge, link and all four
-     borders cell by cell, and compares column widths, row heights, frozen panes, gridlines, zoom, the active sheet and
-     pictures with what the page shows (CSS pixels x 0.75 = points),
+     borders cell by cell, and compares column widths, row heights, frozen panes, gridlines, zoom, the active sheet,
+     pictures and (unless --source) printing with what the page shows (CSS pixels x 0.75 = points),
   4. reports any repair Excel had to make to open the file.
 
 Requires Windows, desktop Excel, PowerShell 7 (pwsh) and Node.js 18+. It starts a hidden Excel and does not use the
@@ -57,52 +64,69 @@ def anchor(sheet, picture):
     return r, c, x, y
 
 
-def check_sheet(workbook, sheet, info):
-    """Differences between the sheet's view, sizes and pictures in Excel and in the page."""
-    problems = []
+def as_list(value):
+    return value if isinstance(value, list) else [] if value is None else [value]
 
-    def differ(item, page, excel):
-        problems.append({'item': item, 'page': page, 'excel': excel})
+
+def check_sheet(workbook, sheet, info, source_notes=None):
+    """(unexpected, expected) differences of the sheet's view, sizes, pictures and printing between Excel and the page.
+
+    source_notes: the reader's notes for this sheet when the .xlsx is the file the table was read from, else None.
+    """
+    problems, expected = [], []
+    sheet_notes = (source_notes or {}).get('sheet', [])
+    col_reason, row_reason = {}, {}
+    for n in sheet_notes:
+        for c in n.get('cols', []) if n['item'] == 'colWidth' else []:
+            col_reason.setdefault(c, n['reason'])
+        for r in n.get('rows', []) if n['item'] == 'rowHeight' else []:
+            row_reason.setdefault(r, n['reason'])
+    reasons = {n['item']: n['reason'] for n in sheet_notes}
+
+    def differ(item, page, excel, why=None):
+        (expected if why else problems).append({'item': item, 'page': page, 'excel': excel, **({'reason': why} if why else {})})
 
     if info['repairs']:
-        differ('Excelによる修復', '修復なしで開く', ' / '.join(x[:300] for x in info['repairs']))
+        differ('Excelによる修復', '修復なしで開く', ' / '.join(x[:300] for x in as_list(info['repairs'])))
     names = [s['name'] for s in workbook['sheets']]
-    if info['sheetNames'] != names:
+    if as_list(info['sheetNames']) != names:
         differ('シートの名前と順番', names, info['sheetNames'])
     active = next(s['name'] for s in workbook['sheets'] if s['id'] == workbook['activeSheet'])
     if info['activeSheet'] != active:
         differ('開いたときのシート', active, info['activeSheet'])
-    widths = info['colWidths'] if isinstance(info['colWidths'], list) else [info['colWidths']]
-    heights = info['rowHeights'] if isinstance(info['rowHeights'], list) else [info['rowHeights']]
+    widths, heights = as_list(info['colWidths']), as_list(info['rowHeights'])
     for c, got in enumerate(widths):
         want = width_px(sheet, c) * 0.75
         if abs(got - want) > SIZE_TOLERANCE:
-            differ(f'列 {paste.col_name(c + 1)} の幅（pt）', want, got)
+            letter = paste.col_name(c + 1)
+            differ(f'列 {letter} の幅（pt）', want, got, col_reason.get(letter) or reasons.get('colWidthAll'))
     for r, got in enumerate(heights):
         want = height_px(sheet, r) * 0.75
         if abs(got - want) > SIZE_TOLERANCE:
-            differ(f'{r + 1} 行目の高さ（pt）', want, got)
+            differ(f'{r + 1} 行目の高さ（pt）', want, got, row_reason.get(r + 1))
     freeze = sheet.get('freeze') or {}
     rows, cols = freeze.get('rows', 0), freeze.get('cols', 0)
     want_freeze = {'freeze': bool(rows or cols), 'splitRow': rows, 'splitColumn': cols} if rows or cols else {'freeze': False}
     got_freeze = {'freeze': info['freeze'], 'splitRow': info['splitRow'], 'splitColumn': info['splitColumn']} if info['freeze'] else {'freeze': False}
     if got_freeze != want_freeze:
-        differ('枠の固定', want_freeze, got_freeze)
+        differ('枠の固定', want_freeze, got_freeze, reasons.get('freeze'))
     if info['gridlines'] != (sheet.get('gridlines') is not False):
         differ('枠線の表示', sheet.get('gridlines') is not False, info['gridlines'])
     zoom = round((workbook.get('view') or {}).get('zoom', 100))
     if info['zoom'] != zoom:
-        differ('倍率（%）', zoom, info['zoom'])
-    # Printing: A4 portrait, every column on one page width, pages down as needed (FitToPagesTall False = automatic).
+        differ('倍率（%）', zoom, info['zoom'], reasons.get('zoom'))
+    # Printing (only for files this skill wrote): A4 portrait, every column on one page width, pages down as needed.
     page = info.get('page')
-    if page:
+    if page and source_notes is None:
         want_page = {'paperSize': 9, 'orientation': 1, 'zoom': False, 'fitWide': 1, 'fitTall': False}
         got_page = {k: page.get(k) for k in want_page}
         if got_page != want_page:
             differ('印刷の設定（A4縦、すべての列を1ページに印刷）', want_page, got_page)
-    pictures = info['pictures'] or []
-    pictures = pictures if isinstance(pictures, list) else [pictures]
-    images = sheet.get('images') or []
+    pictures, images = as_list(info['pictures']), sheet.get('images') or []
+    if 'pictures' in reasons:
+        if len(pictures) != len(images):
+            differ('画像の数', len(images), len(pictures), reasons['pictures'])
+        return problems, expected
     if len(pictures) != len(images):
         differ('画像の数', len(images), len(pictures))
     for i, (image, got) in enumerate(zip(images, pictures)):
@@ -115,33 +139,43 @@ def check_sheet(workbook, sheet, info):
                                    abs(want[k] - have[k]) > (POSITION_TOLERANCE if k in ('左', '上') else SIZE_TOLERANCE))]
         if bad:
             differ(f'画像 {i + 1}（{image["id"]}）の' + '・'.join(bad), want, have)
-    return problems
+    return problems, expected
+
+
+def reader_notes(xlsx):
+    """What scripts/read_xlsx.cjs replaced or left out, by sheet name: {cells: {A1: [{fields, reason}]}, sheet: [...]}."""
+    result = subprocess.run(['node', str(ROOT / 'scripts' / 'read_xlsx.cjs'), str(xlsx)], capture_output=True, check=False)
+    if result.returncode:
+        raise ValueError(result.stderr.decode('utf-8', 'replace').strip())
+    return json.loads(result.stdout.decode('utf-8'))['notes']
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--xlsx', required=True, type=Path, help='build.py --xlsx で書き出したファイル')
+    ap.add_argument('--xlsx', required=True, type=Path, help='build.py --xlsx で書き出したファイル（--source なら、HTMLを作った元のファイル）')
     ap.add_argument('--input', type=Path, help='ブック JSON')
     ap.add_argument('--base', type=Path, help='このスキルで生成した HTML')
     ap.add_argument('--state', type=Path, help='ブラウザーで編集した後の状態テキスト（xlsx をこれで作ったとき）')
+    ap.add_argument('--source', action='store_true', help='--xlsx が、build.py --from-xlsx でHTMLを作った元のファイルのとき')
     ap.add_argument('--out', help='結果フォルダ（省略時は一時フォルダ）')
     args = ap.parse_args()
     if bool(args.input) == bool(args.base) or (args.state and not args.base):
-        ap.error('--input か --base（xlsx を状態テキストで作ったなら --state も）を、build.py --xlsx と同じに指定してください。')
+        ap.error('--input か --base（xlsx を状態テキストで作ったなら --state も）を、build.py と同じに指定してください。')
     if sys.platform != 'win32' or not shutil.which('pwsh') or not shutil.which('node'):
         print('この環境では検証できません（Windows、PowerShell 7 の pwsh、Node.js、デスクトップ版 Excel が必要）。', file=sys.stderr)
         return 2
+    if not args.xlsx.is_file():
+        print(f'エラー: xlsx ファイルがありません: {args.xlsx}', file=sys.stderr)
+        return 1
     try:
         if args.input:
             workbook = build.read_json(args.input)
         else:
             workbook = build.apply_state(args.base, args.state) if args.state else build.read_base(args.base)
         build.validate(workbook)
+        import_notes = reader_notes(args.xlsx) if args.source else None
     except (ValueError, KeyError, TypeError, OSError) as exc:
         print('エラー: ' + str(exc), file=sys.stderr)
-        return 1
-    if not args.xlsx.is_file():
-        print(f'エラー: xlsx ファイルがありません: {args.xlsx}', file=sys.stderr)
         return 1
 
     out = Path(args.out) if args.out else Path(tempfile.mkdtemp(prefix='excel-xlsx-check-'))
@@ -167,24 +201,37 @@ def main():
                 return 2
             raise
         unexpected, _, _ = paste.compare(str(base) + '.native.json', str(base) + '.xlsx.json', notes)
-        cells = [d for d in unexpected if 'cause' not in d]
-        conflicts = [d for d in unexpected if 'cause' in d]
-        sheet_problems = check_sheet(workbook, sheet, json.loads(Path(str(base) + '.sheet.json').read_text(encoding='utf-8-sig')))
-        total += len(cells) + len(sheet_problems)
+        source_notes = (import_notes or {}).get(sheet['name'], {'cells': {}, 'sheet': []}) if args.source else None
+        replaced = {a: {f for n in ns for f in n['fields']} for a, ns in (source_notes or {}).get('cells', {}).items()}
+        why = {a: '、'.join(dict.fromkeys(n['reason'] for n in ns)) for a, ns in (source_notes or {}).get('cells', {}).items()}
+        cells, conflicts, expected = [], [], []
+        for d in unexpected:
+            if d['field'] in replaced.get(d['cell'], set()):
+                expected.append({**d, 'reason': why[d['cell']]})
+            elif 'cause' in d:
+                conflicts.append(d)
+            else:
+                cells.append(d)
         sheet_info = json.loads(Path(str(base) + '.sheet.json').read_text(encoding='utf-8-sig'))
+        sheet_problems, sheet_expected = check_sheet(workbook, sheet, sheet_info, source_notes)
+        total += len(cells) + len(sheet_problems)
         summary.append({'sheet': sheet['name'], 'range': info['range'], 'cells': cells, 'conflicts': conflicts, 'sheetProblems': sheet_problems,
-                        'pageSetupRead': bool(sheet_info.get('page'))})
+                        'expected': expected + sheet_expected, 'pageSetupRead': bool(sheet_info.get('page'))})
 
-    lines = ['# xlsx 検証', '', 'Excel（デスクトップ版）で、元の表を直接作った状態と、xlsx を開いた状態をセルごとに比べた。'
+    what = 'HTMLを作った元の xlsx' if args.source else 'xlsx'
+    lines = ['# xlsx 検証', '', f'Excel（デスクトップ版）で、表を直接作った状態と、{what}を開いた状態をセルごとに比べた。'
              '列幅・行の高さ・枠の固定・枠線・倍率・画像は、HTML の値（px × 0.75 = pt）と比べた。', '']
     for s in summary:
-        lines += [f'## {s["sheet"]}（{s["range"]}）', '', f'- セルの想定外の差: {len(s["cells"])} 件', f'- シートの想定外の差: {len(s["sheetProblems"])} 件', '']
+        lines += [f'## {s["sheet"]}（{s["range"]}）', '', f'- セルの想定外の差: {len(s["cells"])} 件', f'- シートの想定外の差: {len(s["sheetProblems"])} 件',
+                  f'- 仕様どおりの差（読み込みで置き換えた所）: {len(s["expected"])} 件', '']
         if s['cells']:
-            lines += ['| セル | 項目 | Excel で作った表 | xlsx |', '|---|---|---|---|']
+            lines += [f'| セル | 項目 | Excel で作った表 | {what} |', '|---|---|---|---|']
             lines += [f'| {d["cell"]} | {d["label"]} | {d["excel"]!r} | {d["pasted"]!r} |' for d in s['cells'][:200]] + ['']
         if s['sheetProblems']:
-            lines += ['| 項目 | HTML | xlsx を開いた Excel |', '|---|---|---|']
+            lines += [f'| 項目 | HTML | {what}を開いた Excel |', '|---|---|---|']
             lines += [f'| {d["item"]} | {d["page"]!r} | {d["excel"]!r} |' for d in s['sheetProblems'][:200]] + ['']
+        if s['expected']:
+            lines += ['仕様どおりの差:', ''] + [f'- {d.get("cell", "")} {d.get("label", d.get("item", ""))}：{d["reason"]}' for d in s['expected'][:200]] + ['']
         if s['conflicts']:
             lines += ['隣り合うセルの同じ境界に、異なる罫線を指定している箇所がある（データの問題）。Excel はセルの辺ごとに線を1本しか持てない。', '']
             lines += [f'- {d["cell"]}（{d["label"]}）' for d in s['conflicts'][:50]] + ['']
@@ -193,8 +240,9 @@ def main():
     (out / 'report.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
     for s in summary:
         print(f'{s["sheet"]} {s["range"]}: セルの想定外の差 {len(s["cells"])} 件 / シートの想定外の差 {len(s["sheetProblems"])} 件'
+              + (f' / 仕様どおりの差 {len(s["expected"])} 件' if s['expected'] else '')
               + (f' / 罫線の食い違い {len(s["conflicts"])} 件' if s['conflicts'] else '')
-              + ('' if s['pageSetupRead'] else ' / 印刷の設定は読めなかった（プリンターがない環境など）'))
+              + ('' if s['pageSetupRead'] or args.source else ' / 印刷の設定は読めなかった（プリンターがない環境など）'))
     print(f'報告: {report}')
     return 1 if total else 0
 

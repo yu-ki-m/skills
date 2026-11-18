@@ -71,6 +71,18 @@ def to_xlsx(workbook):
     return result.stdout, [line for line in messages.splitlines() if line.strip()]
 
 
+def from_xlsx(path):
+    """The workbook read from an .xlsx file (scripts/read_xlsx.cjs) and the sentences on what could not be carried over."""
+    try:
+        result = subprocess.run(["node", str(ROOT / "scripts" / "read_xlsx.cjs"), str(path)], capture_output=True, check=False)
+    except FileNotFoundError as exc:
+        raise ValueError("Node.js 18+ が必要です。") from exc
+    if result.returncode:
+        raise ValueError(result.stderr.decode("utf-8", "replace").strip())
+    data = json.loads(result.stdout.decode("utf-8"))
+    return data["workbook"], data["warnings"]
+
+
 def read_base(path):
     source = Path(path).read_text(encoding="utf-8-sig")
     match = DATA_RE.search(source)
@@ -165,8 +177,16 @@ def main():
     parser.add_argument("--xlsx", type=Path,
                         help="Excelのファイル（.xlsx）をここに書き出す（HTMLは書き出さない）。--input、--base（生成したHTMLの表）、"
                              "--base と --state（ブラウザーで編集した後の表）のどれかと使う")
+    parser.add_argument("--from-xlsx", type=Path,
+                        help="Excelのファイル（.xlsx）を読み込んで、--output にHTMLを作る（--extract-json ならJSON）")
     args = parser.parse_args()
-    if args.xlsx:
+    if args.from_xlsx:
+        if args.input or args.base or args.state or args.xlsx:
+            parser.error("--from-xlsx は --input・--base・--state・--xlsx と一緒には使えません。")
+        if not args.output:
+            parser.error("--from-xlsx には --output を指定してください。")
+        output_path = args.output
+    elif args.xlsx:
         if args.output or args.extract_json:
             parser.error("--xlsx は --output・--extract-json と一緒には使えません。")
         if bool(args.input) == bool(args.base) or (args.state and not args.base):
@@ -179,7 +199,11 @@ def main():
         if output_path is None:
             parser.error("--output を指定してください。")
     try:
-        if args.input:
+        if args.from_xlsx:
+            workbook, cautions = from_xlsx(args.from_xlsx)
+            for caution in cautions:
+                print("注意: " + caution, file=sys.stderr)
+        elif args.input:
             workbook = read_json(args.input)
         else:
             workbook = apply_state(args.base, args.state) if args.state else read_base(args.base)

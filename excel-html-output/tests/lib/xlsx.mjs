@@ -1,7 +1,54 @@
 // Reads an .xlsx file the way the tests look at it: the zip parts (each part's CRC is checked), and for each sheet its
 // cells with resolved styles, column widths, row heights, merges, view, links and pictures.
 // Only Node.js built-ins are used. It reads what scripts/xlsx.cjs writes; it is not a general xlsx reader.
+// It also makes small hand-written .xlsx files (miniXlsx) for the tests of scripts/read_xlsx.cjs.
 import {crc32, inflateRawSync} from 'node:zlib';
+
+/** A zip (stored, not compressed) of parts: {name: text or Buffer}. */
+export function makeZip(parts) {
+  const chunks = [], central = [];
+  let offset = 0;
+  for (const [name, content] of Object.entries(parts)) {
+    const data = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8'), nameBytes = Buffer.from(name, 'utf8'), crc = crc32(data);
+    const head = Buffer.alloc(30), entry = Buffer.alloc(46);
+    head.writeUInt32LE(0x04034b50, 0); head.writeUInt16LE(20, 4); head.writeUInt32LE(crc, 14); head.writeUInt32LE(data.length, 18); head.writeUInt32LE(data.length, 22); head.writeUInt16LE(nameBytes.length, 26);
+    entry.writeUInt32LE(0x02014b50, 0); entry.writeUInt16LE(20, 4); entry.writeUInt16LE(20, 6); entry.writeUInt32LE(crc, 16); entry.writeUInt32LE(data.length, 20); entry.writeUInt32LE(data.length, 24);
+    entry.writeUInt16LE(nameBytes.length, 28); entry.writeUInt32LE(offset, 42);
+    chunks.push(head, nameBytes, data);
+    central.push(entry, nameBytes);
+    offset += 30 + nameBytes.length + data.length;
+  }
+  const directory = Buffer.concat(central), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(central.length / 2, 8); end.writeUInt16LE(central.length / 2, 10); end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...chunks, directory, end]);
+}
+
+const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+const MINI_STYLES = '<fonts count="1"><font><sz val="11"/><name val="游ゴシック"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill>' +
+  '<fill><patternFill patternType="gray125"/></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>' +
+  '<border><left/><right/><top/><bottom style="thin"/><diagonal/></border></borders>' +
+  '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"><alignment vertical="center"/></xf></cellStyleXfs>' +
+  '<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"><alignment vertical="center"/></xf>' +
+  '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0"><alignment vertical="center"/></xf>' +
+  '<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0"><alignment vertical="center"/></xf></cellXfs>';
+/**
+ * A small hand-written .xlsx with one sheet named S. sheet: the inside of <worksheet> (with <sheetData>); strings: the
+ * <si> items; workbookPr: an element put into workbook.xml. Cell styles: s="1" has a thin bottom border, s="2" format 14.
+ */
+export function miniXlsx({sheet, strings = '', workbookPr = '', styles = MINI_STYLES}) {
+  return makeZip({
+    '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>',
+    '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+    'xl/workbook.xml': `<workbook ${NS}>${workbookPr}<sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    'xl/_rels/workbook.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+      '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>',
+    'xl/worksheets/sheet1.xml': `<worksheet ${NS}>${sheet}</worksheet>`,
+    'xl/styles.xml': `<styleSheet ${NS}>${styles}</styleSheet>`,
+    'xl/sharedStrings.xml': `<sst ${NS}>${strings}</sst>`,
+  });
+}
 
 /** The parts of a zip file as a Map of name -> Buffer. Throws when a part's CRC-32 does not match its data. */
 export function unzip(buffer) {
