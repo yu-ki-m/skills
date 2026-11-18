@@ -252,7 +252,10 @@ function sheetParts(w, s, index, ctx) {
     parts.push([name, drawingXml(s, pictures), TYPE.drawing], [`xl/drawings/_rels/drawing${index + 1}.xml.rels`, rels(drawingRels)]);
     drawing = `<drawing r:id="${id}"/>`;
   }
-  const sheet = HEAD + `<worksheet xmlns="${MAIN}" xmlns:r="${REL}"><dimension ref="${box ? ref(box) : 'A1'}"/>` +
+  // Printing fits every column on one page width, with as many pages down as needed: Excel's 拡大縮小印刷 →
+  // 「すべての列を1ページに印刷」, written as Excel writes it. The paper is written too (A4 portrait, the default of
+  // Japanese Excel), since Excel reads a page setup without a paper size as Letter (desktop Excel 16.0).
+  const sheet = HEAD + `<worksheet xmlns="${MAIN}" xmlns:r="${REL}"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="${box ? ref(box) : 'A1'}"/>` +
     `<sheetViews><sheetView${viewAttrs} workbookViewId="0"${viewXml ? `>${viewXml}</sheetView>` : '/>'}</sheetViews>` +
     // Rows without a height of their own are the page's 22px (16.5pt).
     `<sheetFormatPr defaultRowHeight="${num(DEFAULT_ROW_PX * 0.75)}" customHeight="1"/>` +
@@ -260,7 +263,8 @@ function sheetParts(w, s, index, ctx) {
     (rows.length ? `<sheetData>${rows.join('')}</sheetData>` : '<sheetData/>') +
     (s.merges.length ? `<mergeCells count="${s.merges.length}">${s.merges.map(m => `<mergeCell ref="${ref(m)}"/>`).join('')}</mergeCells>` : '') +
     (links.length ? `<hyperlinks>${links.join('')}</hyperlinks>` : '') +
-    '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>' + drawing + '</worksheet>';
+    '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>' +
+    '<pageSetup paperSize="9" fitToHeight="0" orientation="portrait"/>' + drawing + '</worksheet>';
   parts.unshift([`xl/worksheets/sheet${index + 1}.xml`, sheet, TYPE.sheet]);
   if (relList.length) parts.push([`xl/worksheets/_rels/sheet${index + 1}.xml.rels`, rels(relList)]);
   return parts;

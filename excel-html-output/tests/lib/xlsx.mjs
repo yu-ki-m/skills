@@ -161,10 +161,16 @@ function readSheet(parts, path, name, styles, strings) {
       });
     }
   }
+  // Page setup, with the schema's defaults for what is not written (fitToWidth/Height 1, paperSize 1 = Letter).
+  const setup = kid(xml, 'pageSetup')?.attrs || {};
+  const print = {
+    fitToPage: kid(kid(xml, 'sheetPr'), 'pageSetUpPr')?.attrs.fitToPage === '1', fitToWidth: +(setup.fitToWidth ?? 1), fitToHeight: +(setup.fitToHeight ?? 1),
+    paperSize: +(setup.paperSize ?? 1), orientation: setup.orientation || 'default',
+  };
   const widthOf = c => cols.find(x => x.min <= c + 1 && c + 1 <= x.max)?.width;
   return {
     name, path, cells, rows, cols, widthOf, defaultRowHeight: format.defaultRowHeight === undefined ? undefined : +format.defaultRowHeight,
-    customDefaultHeight: format.customHeight === '1', merges: kids(kid(xml, 'mergeCells'), 'mergeCell').map(m => m.attrs.ref), view, links, pictures,
+    customDefaultHeight: format.customHeight === '1', merges: kids(kid(xml, 'mergeCells'), 'mergeCell').map(m => m.attrs.ref), view, links, pictures, print,
     dimension: kid(xml, 'dimension')?.attrs.ref, root: xml,
   };
 }

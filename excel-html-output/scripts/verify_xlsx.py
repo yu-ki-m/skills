@@ -93,6 +93,13 @@ def check_sheet(workbook, sheet, info):
     zoom = round((workbook.get('view') or {}).get('zoom', 100))
     if info['zoom'] != zoom:
         differ('倍率（%）', zoom, info['zoom'])
+    # Printing: A4 portrait, every column on one page width, pages down as needed (FitToPagesTall False = automatic).
+    page = info.get('page')
+    if page:
+        want_page = {'paperSize': 9, 'orientation': 1, 'zoom': False, 'fitWide': 1, 'fitTall': False}
+        got_page = {k: page.get(k) for k in want_page}
+        if got_page != want_page:
+            differ('印刷の設定（A4縦、すべての列を1ページに印刷）', want_page, got_page)
     pictures = info['pictures'] or []
     pictures = pictures if isinstance(pictures, list) else [pictures]
     images = sheet.get('images') or []
@@ -164,7 +171,9 @@ def main():
         conflicts = [d for d in unexpected if 'cause' in d]
         sheet_problems = check_sheet(workbook, sheet, json.loads(Path(str(base) + '.sheet.json').read_text(encoding='utf-8-sig')))
         total += len(cells) + len(sheet_problems)
-        summary.append({'sheet': sheet['name'], 'range': info['range'], 'cells': cells, 'conflicts': conflicts, 'sheetProblems': sheet_problems})
+        sheet_info = json.loads(Path(str(base) + '.sheet.json').read_text(encoding='utf-8-sig'))
+        summary.append({'sheet': sheet['name'], 'range': info['range'], 'cells': cells, 'conflicts': conflicts, 'sheetProblems': sheet_problems,
+                        'pageSetupRead': bool(sheet_info.get('page'))})
 
     lines = ['# xlsx 検証', '', 'Excel（デスクトップ版）で、元の表を直接作った状態と、xlsx を開いた状態をセルごとに比べた。'
              '列幅・行の高さ・枠の固定・枠線・倍率・画像は、HTML の値（px × 0.75 = pt）と比べた。', '']
@@ -184,7 +193,8 @@ def main():
     (out / 'report.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
     for s in summary:
         print(f'{s["sheet"]} {s["range"]}: セルの想定外の差 {len(s["cells"])} 件 / シートの想定外の差 {len(s["sheetProblems"])} 件'
-              + (f' / 罫線の食い違い {len(s["conflicts"])} 件' if s['conflicts'] else ''))
+              + (f' / 罫線の食い違い {len(s["conflicts"])} 件' if s['conflicts'] else '')
+              + ('' if s['pageSetupRead'] else ' / 印刷の設定は読めなかった（プリンターがない環境など）'))
     print(f'報告: {report}')
     return 1 if total else 0
 

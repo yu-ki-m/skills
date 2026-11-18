@@ -121,7 +121,9 @@ function Open-Xlsx($xl) {
   $ws = $wb.Worksheets.Item($SheetName); $ws.Activate(); $win = $wb.Windows.Item(1)
   $pictures = @(foreach ($sh in $ws.Shapes) { [ordered]@{ name = $sh.Name; type = $sh.Type; topLeft = $sh.TopLeftCell.Address(0, 0)
     left = $sh.Left; top = $sh.Top; width = $sh.Width; height = $sh.Height; placement = $sh.Placement } })
-  $info = [ordered]@{ repairs = $repairs; activeSheet = $active; sheetNames = $names; freeze = $win.FreezePanes; splitRow = $win.SplitRow
+  # Reading the page setup asks the printer driver, which fails where no printer is installed; then it is left out.
+  $page = try { $p = $ws.PageSetup; [ordered]@{ paperSize = $p.PaperSize; orientation = $p.Orientation; zoom = $p.Zoom; fitWide = $p.FitToPagesWide; fitTall = $p.FitToPagesTall } } catch { $null }
+  $info = [ordered]@{ repairs = $repairs; activeSheet = $active; sheetNames = $names; page = $page; freeze = $win.FreezePanes; splitRow = $win.SplitRow
     splitColumn = $win.SplitColumn; gridlines = $win.DisplayGridlines; zoom = $win.Zoom
     colWidths = @(for ($c = 1; $c -le $Cols; $c++) { $ws.Columns.Item($c).Width }); rowHeights = @(for ($r = 1; $r -le $Rows; $r++) { $ws.Rows.Item($r).RowHeight })
     pictures = $pictures; activeCell = $xl.ActiveCell.Address(0, 0); selection = $xl.Selection.Address(0, 0) }

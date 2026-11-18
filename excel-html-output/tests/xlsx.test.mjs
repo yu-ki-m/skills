@@ -175,6 +175,14 @@ test('枠の固定・枠線の表示・倍率・最初に開くシート・選�
   assert.deepEqual(s3.view.selections, [{pane: 'bottomRight', activeCell: 'C4', sqref: 'C4:D5'}], '開いているシートの選択範囲');
 });
 
+test('印刷は、A4縦で、すべての列を1ページの幅に収める（縦のページ数は自動）', () => {
+  const book = blankBook();
+  book.sheets = [book.sheets[0], {...book.sheets[0], id: 'second', name: '2枚目'}];
+  // Excelの「拡大縮小印刷」で「すべての列を1ページに印刷」を選んで保存したときと同じ書き方（デスクトップ版Excel 16.0）。
+  // 用紙を書かないと、Excelはレター用紙として読むので、日本語版Excelの既定のA4を書く。
+  for (const s of read(book).sheets) assert.deepEqual(s.print, {fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9, orientation: 'portrait'}, s.name);
+});
+
 test('リンクは、Excelでセルにハイパーリンクを付けたときと同じく、青の下線の文字にする（フォント名と大きさは元のまま）', () => {
   const s = sheetOf(blankBook({sheet: {cells: {
     A1: {t: 's', v: 'リンク', link: 'https://example.com/a?b=1&c=2'},
