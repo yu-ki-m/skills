@@ -350,6 +350,13 @@ function stringItem(si, book) {
   return {text: unescapeX(text), rich: !uniform && formats.some(f => f !== null), ...(uniform ? {font: JSON.parse(formats[0])} : {})};
 }
 
+/**
+ * A formula of the file as Excel shows it. Excel saves the functions it added in 2010 and later with _xlfn. before their
+ * names (_xlfn.CONCAT(, _xlfn.TEXTJOIN(), a few with _xlfn._xlws. (_xlfn._xlws.SORT(); the page names them as Excel shows
+ * them, so that core.js computes the ones it knows. Strings are left alone.
+ */
+const shownFormula = text => text.replace(/"(?:[^"]|"")*"|(?<![A-Za-z0-9_.])_xlfn\.(?:_xlws\.)?/gi, t => t[0] === '"' ? t : '');
+
 /** Whether the page computes this function: core.js answers #NAME? only for a function it does not know. */
 const knownFunctions = new Map();
 function pageKnows(name) {
@@ -415,10 +422,10 @@ function readSheet(parts, book, info, index, report) {
       if (f) {
         formulaKind = f.attrs.t || 'normal';
         if (formulaKind === 'shared') {
-          const text = textOf(f);
+          const text = shownFormula(textOf(f));
           if (text) { shared.set(f.attrs.si, {text, r: rr, c: cc}); formula = text; }
           else { const master = shared.get(f.attrs.si); if (master) formula = C.shiftFormula('=' + master.text, rr - master.r, cc - master.c).slice(1); }
-        } else formula = textOf(f) || null;
+        } else formula = shownFormula(textOf(f)) || null;
       }
       // A picture in a cell or a data type (a rich value, vm) is saved with an error value that Excel does not show.
       const richValue = c.attrs.vm !== undefined;

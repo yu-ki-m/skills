@@ -103,6 +103,8 @@ test('the formulas compute the functions in FUNCTIONS, and no other',()=>{
   for(const name of C.FUNCTIONS)assert.notEqual(result('='+name+'()'),'#NAME?',name+' is computed (the question read_xlsx.cjs asks)');
   without(C.FUNCTIONS,'SUM',()=>assert.equal(result('=SUM(1,2)'),'#NAME?','a function taken out of FUNCTIONS'));
   without(C.FUNCTIONS,'IF',()=>assert.equal(result('=IF(TRUE,1,2)'),'#NAME?','IF too, though its arguments are computed lazily'));
+  for(const [name,f] of [['CONCATENATE','=CONCATENATE("a")'],['CONCAT','=CONCAT("a")'],['TEXTJOIN','=TEXTJOIN(",",TRUE,"a")']])
+    without(C.FUNCTIONS,name,()=>assert.equal(result(f),'#NAME?',name+' too, though it reads its arguments itself'));
   assert.equal(result('=VLOOKUP(1,A1:B2,2)'),'#NAME?','a function the page does not compute');
   assert.equal(result('=VLOOKUP(1/0,A1:B2,2)'),'#DIV/0!','an error in an argument still comes first, as Excel shows it for VLOOKUP (desktop Excel 16.0)');});
 test('a name Excel does not know is #NAME? even when an argument is an error',{todo:'the page does not know which names Excel knows: =FOO(1/0) shows #DIV/0!, while desktop Excel 16.0 shows #NAME?'},()=>{
@@ -117,3 +119,98 @@ test('validate takes only the values in CHOICES and CELL_TYPES',()=>{const w=mak
   for(const t of C.CELL_TYPES){s.cells.A1=t==='f'?{t,f:'=1'}:{t,v:t==='s'?'x':t==='n'?1:true};assert.doesNotThrow(()=>C.validate(w),t);}
   s.cells.A1={t:'b',v:true};without(C.CELL_TYPES,'b',()=>assert.throws(()=>C.validate(w),/型 A1/,'a type taken out of CELL_TYPES'));
   s.cells.A1={t:'e',v:'#N/A'};assert.throws(()=>C.validate(w),/型 A1/);});
+
+// Joining text: & and CONCATENATE, CONCAT, TEXTJOIN. Every expected value is what desktop Excel 16.0 (build 20326)
+// gave for the same formula on the same cells (set with .Formula through COM, read back with .Value2); a value of the
+// page's own is said so. tests/xlsx-import.test.mjs checks the same against a file Excel saved (fixtures/excel-text.xlsx).
+const joined=x=>C.evalFormula('=A1&""',()=>x);
+test('a number joined as text is written as Excel writes it: 15 significant digits, in full up to 20 characters (the sign aside), else as 1.5E-18',()=>{
+  for(const [x,want] of [[1/3,'0.333333333333333'],[2/3,'0.666666666666667'],[1/7,'0.142857142857143'],[0.1+0.2,'0.3'],[46023,'46023'],[0.125,'0.125'],[-1.5,'-1.5'],
+    [0,'0'],[-0,'0'],[0.9999999999999999,'1'],[9.999999999999998,'10'],[1234567890123456,'1234567890123460'],[123456789012345.6,'123456789012346'],
+    [9.999999999999989e19,'99999999999999900000'],[-9.99999999999999e19,'-99999999999999900000'],[1e20,'1E+20'],[1.5e20,'1.5E+20'],[-1e20,'-1E+20'],
+    [1.23456789012345e21,'1.23456789012345E+21'],[0.000123456789012345,'0.000123456789012345'],[-0.000123456789012345,'-0.000123456789012345'],
+    [0.0000123456789012345,'1.23456789012345E-05'],[0.000012345678901234,'0.000012345678901234'],[1e-5,'0.00001'],[1e-12,'0.000000000001'],
+    [1.5e-12,'0.0000000000015'],[1.23456789012345e-12,'1.23456789012345E-12'],[1e-18,'0.000000000000000001'],[-1e-18,'-0.000000000000000001'],
+    [1.5e-18,'1.5E-18'],[1e-19,'1E-19'],[1e-307,'1E-307'],[2.2250738585072014e-308,'2.2250738585072E-308'],[1.7976931348623157e308,'1.7976931348623E+308']])
+    assert.equal(joined(x),want,String(x));});
+test('a number exactly halfway at the 16th significant digit is rounded toward zero, as Excel does, and one past halfway is rounded up',()=>{
+  for(const [x,want] of [[100000000000000.5,'100000000000000'],[100000000000001.5,'100000000000001'],[-100000000000001.5,'-100000000000001'],
+    [1000000000000.375,'1000000000000.37'],[12345678901234.75,'12345678901234.7'],[123456789012.1875,'123456789012.187'],[1.430511474609375e-6,'1.43051147460937E-06'],
+    // Their exact values lie just past and just short of halfway: 1234567890.0000050067..., 12345678901.0000495910...
+    [1234567890.000005,'1234567890.00001'],[12345678901.00005,'12345678901'],[1.234567890123456,'1.23456789012346'],[7.777777777777778,'7.77777777777778']])
+    assert.equal(joined(x),want,String(x));});
+// The sheet the formulas were measured on: A1 a, A2 empty, A3 1, A4 TRUE, A5 ="", A6 #N/A, A7 12.5% (0.125), A8 2026/01/01 (46023),
+// A9 " sp ", A10 x, B1 b, B2 c, B4 2.5, C1 -, C2 +, D1 the text TRUE, D2 abc, D3 0, D4 2. An error read from Excel is held as its text.
+const SHEET={A1:{t:'s',v:'a'},A3:{t:'n',v:1},A4:{t:'b',v:true},A5:{t:'f',f:'=""'},A6:{t:'s',v:'#N/A'},A7:{t:'n',v:0.125,s:{numFmt:'0%'}},
+  A8:{t:'n',v:46023,s:{numFmt:'yyyy/mm/dd'}},A9:{t:'s',v:' sp '},A10:{t:'s',v:'x'},B1:{t:'s',v:'b'},B2:{t:'s',v:'c'},B4:{t:'n',v:2.5},
+  C1:{t:'s',v:'-'},C2:{t:'s',v:'+'},D1:{t:'s',v:'TRUE',s:{numFmt:'@'}},D2:{t:'s',v:'abc'},D3:{t:'n',v:0},D4:{t:'n',v:2}};
+/** The value of formula f in cell where (H40 unless said) of a sheet holding cells. */
+const on=(f,where='H40',cells=SHEET)=>{const w=make(),s=w.sheets[0];s.rows=60;s.cells={...cells,[where]:{t:'f',f}};const [r,c]=C.coord(where);return C.calculate(w,s,r,c);};
+const check=(cases,cells)=>{for(const [f,want] of cases)assert.equal(on(f,'H40',cells),want,f);};
+test('& joins TRUE and FALSE, numbers and empty cells as Excel writes them',()=>check([['="a"&"b"','ab'],['=A1&B1','ab'],['=A2&"x"','x'],['=A3&"x"','1x'],
+  ['=A4&"x"','TRUEx'],['=TRUE&""','TRUE'],['=FALSE&1','FALSE1'],['=(1=1)&""','TRUE'],['=1&2','12'],['="1"&2+1','13'],['="a"&-1','a-1'],['=50%&""','0.5'],
+  ['=0.1+0.2&""','0.3'],['=A5&"x"','x'],['=A7&""','0.125'],['=A8&""','46023'],['=A9&"|"',' sp |'],['=SUM(1,2)&"件"','3件']]));
+test('a text that reads as a number is a number in arithmetic, as in Excel (="1"&"2"+1 is 13)',{todo:'the page takes only numbers, TRUE, FALSE and empty cells in arithmetic, so "2"+1 is #VALUE!'},()=>check([['="1"&"2"+1','13']]));
+test('every operator shows the error of its left operand first, as Excel does (=A6+1/0 is #N/A)',()=>check([['=A6&"x"','#N/A'],['=1/0&A6','#DIV/0!'],
+  ['=A6&1/0','#N/A'],['=A6+1/0','#N/A'],['=1/0+A6','#DIV/0!'],['=A6*1/0','#N/A'],['=A6-1/0','#N/A'],['=A6^(1/0)','#N/A'],['=A6=1/0','#N/A'],['=A6<1/0','#N/A']]));
+test('a range used as one value, with & or in CONCATENATE, gives its cell in the row or column of the formula (implicit intersection), as Excel does',()=>{
+  for(const [where,f,want] of [['F1','=A1:A3&"x"','ax'],['F2','=A1:A3&"x"','x'],['F3','=A1:A3&"x"','1x'],['F20','=A1:A3&"x"','#VALUE!'],
+    ['G1','=CONCATENATE(A1:A3)','a'],['G2','=CONCATENATE(A1:A3,"!")','!'],['G3','=CONCATENATE(A1:A3)','1'],['G21','=CONCATENATE(A1:A3)','#VALUE!'],
+    ['A22','=CONCATENATE(A1:B1)','a'],['B23','=CONCATENATE(A1:B1)','b'],['B24','="<"&A1:B1','<b'],['A26','=A1:A1&"x"','ax'],['B26','=CONCATENATE(B2:B2)','c'],
+    ['E2','=A1:B2&"x"','#VALUE!'],['A40','=A1:B2&"x"','#VALUE!'],['E1','=CONCATENATE(A1:B2)','#VALUE!']])
+    assert.equal(on(f,where),want,where+' '+f);
+  assert.throws(()=>C.evalFormula('=CONCATENATE(A1:A3)',()=>[1,2,3]),/#VALUE!/,'without the cell of the formula, a range is no one value');});
+test('CONCATENATE joins its arguments in order, each one value, and shows the first error',()=>check([['=CONCATENATE("a","b",1,TRUE)','ab1TRUE'],
+  ['=CONCATENATE(A1)','a'],['=CONCATENATE(A2)',''],['=CONCATENATE(1/3)','0.333333333333333'],['=CONCATENATE(A7,A8)','0.12546023'],['=CONCATENATE(A6,"x")','#N/A'],
+  ['=CONCATENATE("x",1/0,A6)','#DIV/0!'],
+  ['=CONCATENATE()','#VALUE!']])); // Excel does not take this formula; the page shows #VALUE!, as for any wrong number of arguments
+test('CONCAT joins the cells of its ranges row by row, and its arguments in order',()=>check([['=CONCAT("a","b")','ab'],['=CONCAT(A1:B2)','abc'],
+  ['=CONCAT(A1:A5)','a1TRUE'],['=CONCAT(A7,A8)','0.12546023'],['=CONCAT(1/3)','0.333333333333333'],['=CONCAT(A1:B4)','abc1TRUE2.5'],['=CONCAT(B1:B4,A1:A4)','bc2.5a1TRUE'],
+  ['=CONCAT(A2)',''],['=CONCAT(A5)',''],['=CONCAT(A2:B3)','c1'],['=CONCAT(A1:A10)','#N/A'],['=CONCAT(1/0,A6)','#DIV/0!'],['=IFERROR(CONCAT(A6),"err")','err'],
+  ['=IF(TRUE,CONCAT("a",1),0)','a1'],['=CONCAT("a")&TEXTJOIN("-",TRUE,"b","c")','ab-c'],['=CONCAT(SUM(A3:A4))','1'],
+  ['=CONCAT()','#VALUE!']])); // the page's, as for CONCATENATE()
+test('TEXTJOIN puts the delimiter between the texts, takes the delimiters of a range in turn, and leaves out empty texts when ignore_empty is TRUE',()=>check([
+  ['=TEXTJOIN(",",TRUE,A1:A5)','a,1,TRUE'],['=TEXTJOIN(",",FALSE,A1:A5)','a,,1,TRUE,'],['=TEXTJOIN(C1:C2,TRUE,"a","b","c","d")','a-b+c-d'],
+  ['=TEXTJOIN(C1:C3,FALSE,"a","b","c","d","e")','a-b+cd-e'],['=TEXTJOIN(B1:C2,FALSE,"1","2","3","4","5","6")','1b2-3c4+5b6'],
+  // The next delimiter is taken only when a text is put in: an empty text left out does not use one up.
+  ['=TEXTJOIN(C1:C2,TRUE,"a","","b","c")','a-b+c'],['=TEXTJOIN(C1:C2,TRUE,"","a","b","c")','a-b+c'],['=TEXTJOIN(C1:C2,FALSE,"a","","b","c")','a-+b-c'],
+  ['=TEXTJOIN(1,TRUE,"a","b")','a1b'],['=TEXTJOIN(TRUE,TRUE,"a","b")','aTRUEb'],['=TEXTJOIN(0.5,TRUE,"a","b")','a0.5b'],['=TEXTJOIN("",TRUE,"a","b")','ab'],
+  ['=TEXTJOIN(A2,TRUE,"a","b")','ab'],['=TEXTJOIN(A2:A3,FALSE,"a","b","c")','ab1c'],['=TEXTJOIN(A1,TRUE,"x","y")','xay'],['=TEXTJOIN(",",TRUE,"")',''],
+  ['=TEXTJOIN(",",TRUE,A2:A2)',''],['=TEXTJOIN(",",TRUE,A1:B2)','a,b,c'],['=TEXTJOIN(",",FALSE,A1:B2)','a,b,,c'],['=TEXTJOIN(", ",TRUE,A9,A10)',' sp , x'],
+  ['=TEXTJOIN(",",TRUE,A1:A2,"z",A3)','a,z,1'],['=TEXTJOIN(",",TRUE,1/3,2/3)','0.333333333333333,0.666666666666667'],['=TEXTJOIN(",",FALSE,A2,A3)',',1'],
+  ['=TEXTJOIN(",",TRUE,A4,FALSE)','TRUE,FALSE'],['=TEXTJOIN(",",TRUE,A1:B4)','a,b,c,1,TRUE,2.5'],['=TEXTJOIN(",",FALSE,A1:B4)','a,b,,c,1,,TRUE,2.5'],
+  ['=TEXTJOIN(",",TRUE,"a")','a'],
+  ['=TEXTJOIN(",",TRUE)','#VALUE!']])); // the page's, as for CONCATENATE()
+test('TEXTJOIN reads ignore_empty as Excel does: a number, TRUE or FALSE also as text, an empty cell as FALSE, and anything else as #VALUE!',()=>{check([
+  ['=TEXTJOIN(",",1,"a","","b")','a,b'],['=TEXTJOIN(",",0,"a","","b")','a,,b'],['=TEXTJOIN(",",2.5,"a","","b")','a,b'],['=TEXTJOIN(",","TRUE","a","","b")','a,b'],
+  ['=TEXTJOIN(",","true","a","","b")','a,b'],['=TEXTJOIN(",","FALSE","a","","b")','a,,b'],['=TEXTJOIN(",","x","a","b")','#VALUE!'],['=TEXTJOIN(",","","a","b")','#VALUE!'],
+  ['=TEXTJOIN(",","1","a","","b")','#VALUE!'],['=TEXTJOIN(",",A2,"a","","b")','a,,b'],['=TEXTJOIN(",",A1,"a","","b")','#VALUE!'],['=TEXTJOIN(",",A3,"a","","b")','a,b'],
+  ['=TEXTJOIN(",",A4,"a","","b")','a,b'],['=TEXTJOIN(",",D1,"a","","b")','a,b'],['=TEXTJOIN(",",D2,"a","","b")','#VALUE!'],
+  ['=TEXTJOIN(",",A6,"a")','#N/A'],['=TEXTJOIN(A6,TRUE,"a")','#N/A'],['=TEXTJOIN(A5:A6,TRUE,"a","b","c")','#N/A'],['=TEXTJOIN(",",TRUE,A6:A6)','#N/A']]);
+  for(const [where,want] of [['I1','a,b'],['I3','a,,b'],['I25','#VALUE!']])assert.equal(on('=TEXTJOIN(",",D1:D4,"a","","b")',where),want,'ignore_empty D1:D4 in '+where);});
+// Excel reads the arguments in order, but a reference given to CONCAT, or to the delimiter or a text of TEXTJOIN, only after
+// all the arguments: =CONCAT(E1,NA()) is #N/A though E1 holds #DIV/0!. The ignore_empty of TEXTJOIN, and every argument of
+// CONCATENATE and &, take one value, which Excel reads in its turn, from a cell too.
+test('CONCAT and TEXTJOIN read a referenced cell after their other arguments, as Excel does, so that an error given directly comes first',()=>check([
+  ['=CONCAT(A6,1/0)','#DIV/0!'],['=CONCAT(1/0,A6)','#DIV/0!'],['=CONCAT(A6,E1)','#N/A'],['=CONCAT(E1,A6)','#DIV/0!'],['=CONCAT(A6:A6,1/0)','#DIV/0!'],
+  ['=TEXTJOIN(A6,TRUE,1/0)','#DIV/0!'],['=TEXTJOIN(A6,TRUE,E1)','#N/A'],['=TEXTJOIN(A6,1/0,"a")','#DIV/0!'],['=TEXTJOIN(",",TRUE,A6,1/0)','#DIV/0!'],
+  ['=TEXTJOIN(1/0,TRUE,A6)','#DIV/0!'],['=TEXTJOIN(",",1/0,A6)','#DIV/0!'],['=TEXTJOIN(",","x",1/0)','#VALUE!'],['=TEXTJOIN(",","x",A6)','#VALUE!'],
+  ['=TEXTJOIN(A6,"x","a")','#VALUE!'],['=TEXTJOIN(E1,A6,"a")','#N/A'],['=CONCATENATE(A6,1/0)','#N/A'],['=A6&1/0','#N/A']],{...SHEET,E1:{t:'f',f:'=1/0'}}));
+test('a cell whose formula gives "" is no empty cell for the ignore_empty of TEXTJOIN: Excel shows #VALUE!',{todo:'the page holds an empty cell and a formula that gives "" alike (both are ""), so =TEXTJOIN(",",A5,"a","","b") reads A5 as an empty cell, FALSE, and shows a,,b'},()=>{
+  assert.equal(on('=TEXTJOIN(",",A5,"a","","b")'),'#VALUE!');});
+test('an argument of CONCATENATE, CONCAT and TEXTJOIN may be left empty, as in Excel: it is empty text, and TRUE for the ignore_empty of TEXTJOIN',()=>{
+  check([['=CONCATENATE("a",,"b")','ab'],['=CONCATENATE(,)',''],['=CONCATENATE("a",)','a'],['=CONCAT("a",,"b")','ab'],['=CONCAT("a",)','a'],['=TEXTJOIN(,TRUE,"a","b")','ab'],
+    ['=TEXTJOIN(",",,"a","","b")','a,b'],['=TEXTJOIN(",",TRUE,"a",,"b")','a,b'],['=TEXTJOIN(",",FALSE,"a",,"b")','a,,b'],['=TEXTJOIN(",",FALSE,"a",)','a,'],
+    ['=TEXTJOIN(",",TRUE,)',''],['=TEXTJOIN(,,A1:A3)','a1']]);
+  // Each of the other functions reads an empty argument in a way of its own in Excel, which the page does not compute, so it
+  // still does not read such a formula (an xlsx gets its text, and a formula read from xlsx becomes Excel's value).
+  for(const f of ['=SUM(1,,2)','=IF(TRUE,)','=ROUND(1.5,)'])assert.throws(()=>C.evalFormula(f,null,true),f);});
+test('& and CONCATENATE cut a text at 32767 characters, as Excel does; CONCAT and TEXTJOIN show #VALUE! for a longer text (desktop Excel 16.0 shows #CALC!)',()=>{
+  const y=n=>'y'.repeat(n),cells={A3:{t:'n',v:1},A6:{t:'s',v:'#N/A'},A11:{t:'s',v:y(32767)},A12:{t:'s',v:y(32766)},A13:{t:'s',v:y(32765)}};
+  check([['=A11&"b"',y(32767)],['=A12&"bc"',y(32766)+'b'],['=A12&"bc"&"d"',y(32766)+'b'],['=CONCATENATE(A12,"bc")',y(32766)+'b'],['=CONCATENATE(A11,A11)',y(32767)],
+    ['=CONCAT(A11,"")',y(32767)],['=CONCAT(A13,"ab")',y(32765)+'ab'],['=CONCAT(A13,"abc")','#VALUE!'],['=CONCAT(A12&"bc")',y(32766)+'b'],['=CONCAT(A11,"b",A6)','#N/A'],
+    ['=TEXTJOIN(",",TRUE,A11)',y(32767)],['=TEXTJOIN("",TRUE,A12,"b")',y(32766)+'b'],['=TEXTJOIN(",",TRUE,A12,"b")','#VALUE!'],
+    // TEXTJOIN counts the delimiter in front of an empty text before it leaves the text out: A11 and "" come to 32767+1.
+    ['=TEXTJOIN(",",TRUE,A11,"")','#VALUE!'],['=TEXTJOIN(",",TRUE,A12,"")',y(32766)],['=TEXTJOIN(",",TRUE,A13,"","","")',y(32765)],
+    ['=TEXTJOIN(",",TRUE,A13,A2:A5)','#VALUE!'],['=TEXTJOIN(",",FALSE,A13,"","")',y(32765)+',,'],['=TEXTJOIN(",",FALSE,A13,"","","")','#VALUE!'],
+    ['=TEXTJOIN(",",TRUE,A11,"",A6)','#N/A']],cells);});

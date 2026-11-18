@@ -75,6 +75,23 @@ test('数式の中の文字列（"" を含む）は大文字にせず、計算�
   assert.deepEqual({formula: s.cells.B3.formula, ...valueOf(s, 'B3')}, {formula: 'A1<2', type: 'b', value: true});
 });
 
+// Excel 2016 added CONCAT and TEXTJOIN after the file format was set, and saves them with _xlfn. before their names (desktop
+// Excel 16.0 saved _xlfn.CONCAT( and _xlfn.TEXTJOIN(, and CONCATENATE( as it is). Without it, Excel shows #NAME? even when it
+// computes the formulas again.
+test('CONCAT と TEXTJOIN は、Excelが保存するのと同じく関数名の前に _xlfn. を付けて書く', () => {
+  const s = sheetOf(blankBook({sheet: {cells: {
+    A1: {t: 's', v: 'a'}, A2: {t: 'n', v: 1},
+    B1: {t: 'f', f: '=concat(A1,"x")'}, B2: {t: 'f', f: '=TEXTJOIN(",",TRUE,A1:A2)'}, B3: {t: 'f', f: '=CONCATENATE(A1,"CONCAT(")'},
+    B4: {t: 'f', f: '=CONCAT(A1)&textjoin("-",,A1,"b")'}, B5: {t: 'f', f: '=TEXTJOIN(,TRUE,A1:A2)'},
+  }}}));
+  const f = a => ({formula: s.cells[a].formula, ...valueOf(s, a)});
+  assert.deepEqual(f('B1'), {formula: '_xlfn.CONCAT(A1,"x")', type: 'str', value: 'ax'});
+  assert.deepEqual(f('B2'), {formula: '_xlfn.TEXTJOIN(",",TRUE,A1:A2)', type: 'str', value: 'a,1'});
+  assert.deepEqual(f('B3'), {formula: 'CONCATENATE(A1,"CONCAT(")', type: 'str', value: 'aCONCAT('}, 'CONCATENATE と文字列の中には付けない');
+  assert.deepEqual(f('B4'), {formula: '_xlfn.CONCAT(A1)&_xlfn.TEXTJOIN("-",,A1,"b")', type: 'str', value: 'aa-b'});
+  assert.deepEqual(f('B5'), {formula: '_xlfn.TEXTJOIN(,TRUE,A1:A2)', type: 'str', value: 'a1'}, '空の引数もそのまま');
+});
+
 test('HTMLの数式として読めない式は、Excelで壊れたファイルにしないよう、その文字のまま文字列で書き、そのことを知らせる', () => {
   const book = blankBook({sheet: {cells: {A1: {t: 'f', f: '=SUM(A2:A3'}, A2: {t: 'f', f: '=Sheet2!A1'}, A3: {t: 'f', f: '=A1+'}}}});
   const {bytes, warnings} = toXlsx(book), s = readXlsx(bytes).sheets[0];

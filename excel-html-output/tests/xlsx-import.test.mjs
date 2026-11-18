@@ -7,7 +7,7 @@ import {createRequire} from 'node:module';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {blankBook, Core, SKILL_ROOT} from './lib/workbook.mjs';
-import {miniXlsx} from './lib/xlsx.mjs';
+import {miniXlsx, readXlsx} from './lib/xlsx.mjs';
 
 const require = createRequire(import.meta.url);
 const {fromXlsx, tint} = require(join(SKILL_ROOT, 'scripts', 'read_xlsx.cjs'));
@@ -66,8 +66,41 @@ test('計算できるかは core.js に問い合わせて決めるので、core.
   assert.equal(cells.A1.f, '=ABS(-3)+MOD(7,4)');
   assert.deepEqual([cells.B1, cells.C1, cells.D1], [{t: 'n', v: 6}, {t: 'n', v: 1}, {t: 'n', v: 6}], 'core.js にない関数と、上限の外を参照する式は値');
   assert.ok(warned(result, /SUMIF/));
-  assert.ok(warned(result, /_XLFN\.IFS/));
+  assert.ok(warned(result, /C1（=IFS\(TRUE,1\)：HTMLで計算できない関数（IFS）/), 'ファイルの中で関数名の前に付く _xlfn. は外して、Excelの画面と同じ名前で知らせる');
   assert.ok(warned(result, /上限（500行・100列）の外を参照/));
+});
+
+// Excel saves the functions it added in 2010 and later with _xlfn. before their names (_xlfn.CONCAT(, _xlfn.TEXTJOIN(); a
+// few have _xlfn._xlws. (_xlfn._xlws.SORT(). The page names them as Excel shows them, and computes the ones core.js knows.
+test('Excelが関数名の前に _xlfn. を付けて保存した関数も、計算できれば数式のまま移す（共有数式も、文字列の中はそのまま）', () => {
+  const sheet = '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>a</t></is></c>' +
+    '<c r="B1" t="str"><f t="shared" ref="B1:B2" si="0">_xlfn.CONCAT(A1,"_xlfn.")</f><v>a_xlfn.</v></c><c r="C1" t="str"><f>_xlfn.TEXTJOIN(",",TRUE,A1:A2)</f><v>a,b</v></c>' +
+    '<c r="D1"><f>_xlfn._xlws.SORT(A1:A2)</f><v>0</v></c></row>' +
+    '<row r="2"><c r="A2" t="inlineStr"><is><t>b</t></is></c><c r="B2" t="str"><f t="shared" si="0"/><v>b_xlfn.</v></c></row></sheetData>';
+  const result = fromXlsx(miniXlsx({sheet})), cells = result.workbook.sheets[0].cells;
+  assert.deepEqual([cells.B1.f, cells.B2.f, cells.C1.f], ['=CONCAT(A1,"_xlfn.")', '=CONCAT(A2,"_xlfn.")', '=TEXTJOIN(",",TRUE,A1:A2)']);
+  assert.deepEqual(cells.D1, {t: 'n', v: 0});
+  assert.ok(warned(result, /D1（=SORT\(A1:A2\)：HTMLで計算できない関数（SORT）/));
+  assert.ok(!warned(result, /HTMLで計算した値が/), 'HTMLの計算も、Excelが保存していた値と同じ');
+});
+
+// tests/fixtures/excel-text.xlsx holds formulas that join text, made and saved inside desktop Excel 16.0 (build 20326) with
+// the values Excel computed (tests/fixtures/make-excel-text.ps1). They are read here with tests/lib/xlsx.mjs, apart from the
+// importer, and compared with what core.js computes on the book read from the file.
+test('文字をつなぐ数式（&・CONCATENATE・CONCAT・TEXTJOIN）は、Excelで作ったファイルから数式のまま移り、HTMLの計算がExcelの保存した値と同じになる', () => {
+  const bytes = readFileSync(join(SKILL_ROOT, 'tests', 'fixtures', 'excel-text.xlsx'));
+  const result = fromXlsx(bytes, {name: 'excel-text.xlsx'}), w = result.workbook, s = w.sheets[0];
+  assert.deepEqual(result.warnings, [], '値にした数式も、HTMLとExcelで値の違う数式もない');
+  const saved = Object.entries(readXlsx(bytes).sheets[0].cells).filter(([, cell]) => cell.formula !== undefined);
+  assert.ok(saved.length > 150 && saved.some(([a]) => a === 'N44'), 'ファイルの数式を読めている');
+  assert.deepEqual(saved.filter(([a]) => s.cells[a]?.t !== 'f').map(([a]) => a), [], 'どの数式も数式のまま');
+  const cache = new Map(), differ = [];
+  for (const [a, cell] of saved) {
+    const [r, c] = Core.coord(a), got = Core.calculate(w, s, r, c, new Set(), cache), want = cell.value ?? '';
+    if (got !== want) differ.push(`${a} ${cell.formula}: HTML ${JSON.stringify(got)}、Excel ${JSON.stringify(want)}`);
+  }
+  assert.deepEqual(differ, [], 'HTMLの計算がExcelの値と違う数式');
+  assert.equal(s.cells.I1.f, '=TEXTJOIN(",",D1:D4,"a","","b")');
 });
 
 test('HTMLにない表示形式・罫線・網かけや、移せない回転・非表示の列・条件付き書式などは、近いものにするか外して知らせる', () => {

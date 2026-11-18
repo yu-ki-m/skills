@@ -97,7 +97,11 @@ function Build-Native($xl, [switch]$NormalFromBook) {
         if ($v -ne '' -and $st.numFmt -ne '@') { $scratch.Value2 = $v; $needPrefix = $scratch.HasFormula -or -not ($scratch.Value2 -is [string]) -or [string]$scratch.Value2 -ne $v; $scratch.Clear() | Out-Null }
         $x.Value2 = $(if ($needPrefix) { "'" + $v } else { $v })
       }
-      'n' { $x.Value2 = [double]$cell.v }
+      # ConvertFrom-Json reads an integer past the range of Int64 (-99999999999999900000, as JavaScript writes such a number)
+      # as a BigInteger, which [double] cuts toward zero; parsed from its digits it is the nearest double, as in the book.
+      # The value is set as [double]$n: set from an expression without that cast ($(...) or the result of Parse), the COM
+      # call failed with "Unable to cast object of type 'System.Double' to type 'System.String'" (PowerShell 7.6).
+      'n' { $n = $cell.v; if ($n -is [System.Numerics.BigInteger]) { $n = [double]::Parse($n.ToString(), [Globalization.CultureInfo]::InvariantCulture) }; $x.Value2 = [double]$n }
       'b' { $x.Value2 = [bool]$cell.v }
       'f' { $x.Formula = $cell.f }
     }

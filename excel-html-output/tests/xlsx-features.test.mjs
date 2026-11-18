@@ -87,11 +87,16 @@ const FORMAT_IN_EXCEL = {'General': [0, 1234.5], '@': [49, '00123'], '0': [1, 12
   '0%': [9, 0.125], '0.00%': [10, 0.125], '¥#,##0': ['"¥"#,##0', 30000], 'yyyy/mm/dd': ['yyyy/mm/dd', 46023]};
 const BORDER_IN_EXCEL = {'0.5px solid': 'hair', '1px solid': 'thin', '2px solid': 'medium', '3px solid': 'thick', '1px dashed': 'dashed',
   '2px dashed': 'mediumDashed', '1px dotted': 'dotted', '3px double': 'double'};
-// A formula with each function, and its value (the page's, which desktop Excel 16.0 gives too).
+// A formula with each function, and its value (the page's, which desktop Excel 16.0 gives too); a third item is the formula as
+// Excel stores it in the file where it differs (Excel saves the functions it added in 2010 and later, such as CONCAT and
+// TEXTJOIN of Excel 2016, with _xlfn. before their names).
 const FUNCTION_IN_EXCEL = {SUM: ['=SUM(1,2,3)', 6], AVERAGE: ['=AVERAGE(2,4)', 3], MIN: ['=MIN(5,2,9)', 2], MAX: ['=MAX(5,2,9)', 9],
   COUNT: ['=COUNT(1,2,"a")', 2], COUNTA: ['=COUNTA(1,"a")', 2], IF: ['=IF(TRUE,1,2)', 1], IFERROR: ['=IFERROR(1/0,5)', 5],
   AND: ['=AND(TRUE,FALSE)', false], OR: ['=OR(FALSE,TRUE)', true], NOT: ['=NOT(FALSE)', true], ROUND: ['=ROUND(1.25,1)', 1.3],
-  ROUNDDOWN: ['=ROUNDDOWN(1.29,1)', 1.2], ROUNDUP: ['=ROUNDUP(1.21,1)', 1.3], INT: ['=INT(-1.5)', -2], ABS: ['=ABS(-3)', 3], MOD: ['=MOD(7,4)', 3]};
+  ROUNDDOWN: ['=ROUNDDOWN(1.29,1)', 1.2], ROUNDUP: ['=ROUNDUP(1.21,1)', 1.3], INT: ['=INT(-1.5)', -2], ABS: ['=ABS(-3)', 3], MOD: ['=MOD(7,4)', 3],
+  CONCATENATE: ['=CONCATENATE("a",1/4,TRUE)', 'a0.25TRUE'], CONCAT: ['=CONCAT("a",1/3)', 'a0.333333333333333', '_xlfn.CONCAT("a",1/3)'],
+  TEXTJOIN: ['=TEXTJOIN("-",TRUE,"a","","b")', 'a-b', '_xlfn.TEXTJOIN("-",TRUE,"a","","b")']};
+const TYPE_IN_EXCEL = {boolean: 'b', number: 'n', string: 'str'};
 
 /** A font flag: the cell with it, and a cell without it. */
 const fontFlag = (key, name, want) => ({
@@ -172,10 +177,10 @@ const SAMPLES = [
       assert.deepEqual([s.links.A1, st.font.underline, st.font.color, st.cellStyle], ['https://example.com/a?b=1&c=2', 'single', '#0563c1', 8]); },
     // In Excel a hyperlink is the Hyperlink cell style's blue underlined text, so the text read back has that format.
     back: w => assert.deepEqual(w.sheets[0].cells.A1, {t: 's', v: 'サイト', link: 'https://example.com/a?b=1&c=2', s: {underline: true, color: '#0563c1'}})},
-  ...Object.entries(FUNCTION_IN_EXCEL).map(([name, [f, value]]) => ({
+  ...Object.entries(FUNCTION_IN_EXCEL).map(([name, [f, value, stored = f.slice(1)]]) => ({
     name: '関数 ' + name, covers: ['function.' + name],
     book: () => bookOf({A1: {t: 'f', f}}),
-    excel: x => assert.deepEqual({formula: cellOf(x, 'A1').formula, ...valueOf(x, 'A1')}, {formula: f.slice(1), type: typeof value === 'boolean' ? 'b' : 'n', value}),
+    excel: x => assert.deepEqual({formula: cellOf(x, 'A1').formula, ...valueOf(x, 'A1')}, {formula: stored, type: TYPE_IN_EXCEL[typeof value], value}),
   })),
   // The ids and the revision let the page match an edit state to its book; Excel has nothing like them. They are not
   // written, and a book read from xlsx gets new ones (from the file's name and contents).

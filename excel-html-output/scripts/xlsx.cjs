@@ -53,11 +53,21 @@ const num = n => String(Object.is(n, -0) ? 0 : n);
 const hex = color => color.slice(1).toUpperCase();
 const ref = q => q.r1 === q.r2 && q.c1 === q.c2 ? C.addr(q.r1, q.c1) : C.addr(q.r1, q.c1) + ':' + C.addr(q.r2, q.c2);
 
-// The formula as Excel stores it: without "=", with function names and references in capitals (strings left alone).
-// Returns null when the page's formula reader cannot read it, since Excel would refuse the whole file for it.
+// Functions Excel added after the file format was set, which Excel saves with _xlfn. before their names (desktop Excel 16.0
+// saved _xlfn.CONCAT( and _xlfn.TEXTJOIN(, and CONCATENATE( as it is). Without it, Excel shows #NAME? for the formula, even
+// after it computes the formulas again.
+const NEWER_FUNCTIONS = ['CONCAT', 'TEXTJOIN'];
+
+// The formula as Excel stores it: without "=", with function names and references in capitals (strings left alone), and
+// _xlfn. before the newer functions. Returns null when the page's formula reader cannot read it, since Excel would refuse
+// the whole file for it.
 function excelFormula(f) {
   try { C.evalFormula(f, null, true); } catch { return null; }
-  return f.slice(1).replace(/"(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_.]*/g, t => t[0] === '"' ? t : t.toUpperCase());
+  return f.slice(1).replace(/"(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_.]*/g, (t, at, all) => {
+    if (t[0] === '"') return t;
+    const name = t.toUpperCase();
+    return NEWER_FUNCTIONS.includes(name) && /^\s*\(/.test(all.slice(at + t.length)) ? '_xlfn.' + name : name;
+  });
 }
 
 /** Fonts, fills, borders, number formats and cell formats, each written once and referred to by number. */

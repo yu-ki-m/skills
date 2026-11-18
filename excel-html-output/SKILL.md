@@ -27,8 +27,10 @@ description: 表・一覧・帳票・見積書・集計表などを、Excel（�
      管理番号・郵便番号・電話番号・コードのように計算しない番号は文字列にし、先頭ゼロがあるなら `numFmt:"@"` を付ける。
    - **合計や小計は数式にする。** 数式にしておけば、ユーザーが数量を直したときにHTML上で再計算される。
      Excelには、参照先がコピー範囲の中にある限り数式のまま貼り付く。
-     HTMLで計算できる関数は SUM / AVERAGE / MIN / MAX / COUNT / COUNTA / IF / IFERROR / AND / OR / NOT / ROUND / ROUNDDOWN / ROUNDUP / INT / ABS / MOD と四則演算・比較・`&` だけである。
+     HTMLで計算できる関数は SUM / AVERAGE / MIN / MAX / COUNT / COUNTA / IF / IFERROR / AND / OR / NOT / ROUND / ROUNDDOWN / ROUNDUP / INT / ABS / MOD と、文字をつなぐ CONCATENATE / CONCAT / TEXTJOIN、四則演算・比較・`&` だけである。
      消費税の1円未満切り捨ては `=ROUNDDOWN(小計*0.1,0)` で書ける。
+     文字をつなぐ数式は、数値を有効数字15桁の文字にし、表示形式を使わない（日付はシリアル値の数字になる）。
+     日付や金額を表示どおりの文字でつなぐ必要があれば、その文字を文字列で入れる（[データ形式](references/workbook-schema.md#数式)）。
      これ以外の関数はHTML上で `#NAME?` と表示されるので使わない。
      必要なら値を計算して数値で入れるか、`assets/core.js` に関数を足して試験する。
    - **寸法を決める。** 列幅・行の高さはCSSピクセルで指定する。
@@ -379,6 +381,17 @@ Excelの取り込みは、HTMLとしてもっともらしい書き方でも結�
 Excelへの受け渡しは、セルの範囲を選んでCtrl+Cでコピーし、そのままExcelにCtrl+Vする操作で行う。
 これはExcel同士でコピーするときと同じ操作なので、利用者は新しい手順を覚えずに済む。
 リボンと右クリックメニューの「コピー」は、Excelにも同じ項目があるので残す。
+
+文字をつなぐ数式（`&`・CONCATENATE・CONCAT・TEXTJOIN）の計算は、デスクトップ版Excel 16.0（ビルド20326）に同じ数式を入れて測った結果に合わせてある（`core.js` の `numberText` と `join`）。
+数値は有効数字15桁に丸めた文字になり、固定小数で書くと符号を除いて20文字を超える数は `1.5E-18` のような指数の形になる。
+`&` と CONCATENATE に範囲を渡すと、Excelと同じく、数式と同じ行（1行の範囲なら同じ列）のセルの値を使う。
+エラーが2つ以上ある引数のどれを出すか、32767文字を超えたときの扱い、空の引数の読み方も、Excelに合わせた。
+規則の一覧と、Excelと違う所は、[互換性の資料](references/excel-compatibility.md#文字をつなぐ数式) にある。
+これらの規則は、Excelの中で作って保存した見本（`tests/fixtures/excel-text.xlsx`、作り方は同じフォルダーの `make-excel-text.ps1`）で確かめている。
+`tests/xlsx-import.test.mjs` が見本を読み込み、HTMLの計算がExcelの保存した値とすべての数式で同じになるかを調べる。
+数式の計算を変えたら、見本をExcelで作り直し、このテストを通す。
+xlsxでは、CONCAT と TEXTJOIN を、Excelが保存するのと同じく `_xlfn.CONCAT(` のように書き、読み込みでは `_xlfn.` を外す。
+`_xlfn.` がないと、Excelは計算し直しても `#NAME?` を表示する。
 
 セル内の改行は、デスクトップ版Excel 2021で測った動作に合わせてある。
 Excelでは、編集中のAlt+Enterだけが改行を入れる。

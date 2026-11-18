@@ -120,9 +120,18 @@ Excelはセルの辺ごとに線を1本しか持てない。
 ## 数式
 
 HTMLで計算できるのは、同じシートのA1参照（`$` 付きを含む）と範囲、四則演算、べき乗、`%`、比較、`&`、括弧、文字列である。
-関数は SUM / AVERAGE / MIN / MAX / COUNT / COUNTA / IF / IFERROR / AND / OR / NOT / ROUND / ROUNDDOWN / ROUNDUP / INT / ABS / MOD に限る。
+関数は SUM / AVERAGE / MIN / MAX / COUNT / COUNTA / IF / IFERROR / AND / OR / NOT / ROUND / ROUNDDOWN / ROUNDUP / INT / ABS / MOD と、文字をつなぐ CONCATENATE / CONCAT / TEXTJOIN に限る。
 未対応の関数は `#NAME?`、不正な引数は `#VALUE!`、循環参照は `#CIRC!` と表示する。
 式の評価に `eval` や `Function` は使っていない。
+
+文字をつなぐ数式（`&`・CONCATENATE・CONCAT・TEXTJOIN）は、Excelと同じ文字を返す。
+数値は有効数字15桁の文字になり、セルの表示形式は使わない。
+そのため、2026/01/01と表示した日付をつなぐと `46023`（シリアル値）になり、12.5%と表示した比率は `0.125` になる。
+HTMLにはTEXT関数がないので、日付や金額を表示どおりの文字でつなぐ必要があれば、その文字を文字列として入れる。
+範囲のセルをまとめてつなぐときは、CONCAT か TEXTJOIN を使う（`=TEXTJOIN("、",TRUE,B2:D2)` は空のセルを除いて「、」でつなぐ）。
+`&` と CONCATENATE に範囲を渡すと、Excelと同じく、数式と同じ行（横に並んだ範囲なら同じ列）のセルの値だけを使う。
+数字だけの文字列（`"2"` など）は、Excelと違って計算には使えず、`#VALUE!` になる。
+細かい規則は [Excelとの互換性](excel-compatibility.md#文字をつなぐ数式) にある。
 
 Excelに貼ると、参照先がすべてコピー範囲の中にある数式は、数式のまま入る。
 範囲の外を参照する数式は、HTMLが計算した値で入る。

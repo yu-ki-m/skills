@@ -114,6 +114,24 @@ test('計算できない数式は、Excelと同じエラー値を表示する', 
   assert.equal(await x.text('G7'), '#VALUE!');
 });
 
+test('文字をつなぐ数式（&・CONCATENATE・CONCAT・TEXTJOIN）は、Excelと同じ文字を表示し、参照先を変えると計算し直す', async t => {
+  const x = await env.open(t, book);
+  await x.enter('F4', '=A4&"-"&B4');
+  await x.enter('F5', '=CONCATENATE(B4,"×",C4,"件")');
+  await x.enter('F6', '=CONCAT(B4:B6)');
+  await x.enter('G4', '=TEXTJOIN("、",TRUE,B4:B6,H4)');
+  await x.enter('G5', '=D4/7&"円"');
+  assert.equal(await x.text('F4'), '00123-保守作業');
+  assert.equal(await x.text('F5'), '保守作業×3件');
+  assert.equal(await x.text('F6'), '保守作業監視設定作業');
+  assert.equal(await x.text('G4'), '保守作業、監視、設定作業', '空のセル（H4）は入れない');
+  assert.equal(await x.text('G5'), '1714.28571428571円', '数値は、Excelと同じく有効数字15桁の文字になる');
+  await x.enter('C4', '5');
+  await x.enter('H4', '追加');
+  assert.equal(await x.text('F5'), '保守作業×5件');
+  assert.equal(await x.text('G4'), '保守作業、監視、設定作業、追加');
+});
+
 test('範囲を選んで入力すると、Enter のたびに範囲の中の次のセルへ進む', async t => {
   const x = await env.open(t, book);
   await x.select('H4:H5');
