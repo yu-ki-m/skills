@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: html-only-no-xlsx
+expected_outcome: |
+  画面で編集できる単一のHTMLに、5列・3行の貸出一覧が入っている。備品番号は先頭ゼロ付きの文字列、貸出日と返却予定日は日付。
+  ユーザーはExcelのファイルを求めていないので、.xlsx ファイルは作られていない。

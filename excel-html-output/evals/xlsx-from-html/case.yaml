@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: xlsx-from-html
+expected_outcome: |
+  備品管理表.html と同じ表が入った .xlsx ファイルが作業フォルダーにでき、デスクトップ版Excelで修復なしに開ける。
+  値・型・数式・表示形式・フォント・色・塗り・罫線・列幅・行の高さ・枠の固定がHTMLの表と同じで、
+  管理番号は先頭ゼロ付きの文字列、購入金額の合計は数式のまま入っている。元の 備品管理表.html は変わっていない。
+context:
+  scaffold_script: place-files.sh

@@ -1,9 +1,10 @@
-// scripts/build.py：検査、埋め込み、リビジョン、以前の内容を残す書き出し、状態テキストの反映、--extract-json。
+// scripts/build.py：検査、埋め込み、リビジョン、以前の内容を残す書き出し、状態テキストの反映、--extract-json、--xlsx。
 import assert from 'node:assert/strict';
 import {existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {after, before, test} from 'node:test';
 import {blankBook, buildBook, Core, embeddedBook, fixture, removeDir, runBuild, tempDir} from './lib/workbook.mjs';
+import {readXlsx} from './lib/xlsx.mjs';
 
 let dir;
 before(() => { dir = tempDir(); });
@@ -21,6 +22,8 @@ function stateText(htmlPath, edit, format = 'toon') {
 }
 const newFolder = name => { const folder = join(dir, name); mkdirSync(folder, {recursive: true}); return folder; };
 const listHtml = folder => readdirSync(folder).filter(n => n.endsWith('.html')).sort();
+const listXlsx = folder => readdirSync(folder).filter(n => n.endsWith('.xlsx')).sort();
+const xlsxOf = path => readXlsx(readFileSync(path));
 
 test('ブックJSONから、データを埋め込んだ単一のHTMLを作り、リビジョンを内容から決める', () => {
   const html = buildBook(fixture('book'), dir, 'revision.html');
@@ -144,4 +147,81 @@ test('引数の組み合わせが足りない・出力先がフォルダーの�
   assert.equal(toDir.status, 1);
   assert.match(toDir.stderr, /出力先がフォルダーです/);
   assert.ok(existsSync(dir));
+});
+
+test('--xlsx は、生成したHTMLに入っている表からxlsxを作り、HTMLは変えない', () => {
+  const folder = newFolder('xlsx-base');
+  const html = buildBook(fixture('book'), folder, '表.html');
+  const original = readFileSync(html, 'utf8');
+  const xlsx = join(folder, '表.xlsx');
+  const result = runBuild(['--base', html, '--xlsx', xlsx]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /表\.xlsx/);
+  const x = xlsxOf(xlsx);
+  assert.deepEqual(x.sheets.map(s => s.name), ['明細', '予備']);
+  assert.deepEqual([x.sheets[0].cells.B4.value, x.sheets[0].cells.E9.formula], ['保守作業', 'E7+E8']);
+  assert.equal(readFileSync(html, 'utf8'), original);
+  assert.deepEqual(listHtml(folder), ['表.html'], 'HTMLの以前の内容のファイルも作らない');
+});
+
+test('--xlsx に --state を足すと、ブラウザーで編集した後の表でxlsxを作り、HTMLは変えない', () => {
+  const folder = newFolder('xlsx-state');
+  const html = buildBook(fixture('book'), folder, '表.html');
+  const original = readFileSync(html, 'utf8');
+  writeFileSync(join(folder, 'state.txt'), stateText(html, w => { w.sheets[0].cells.B4.v = 'ブラウザーで直した'; w.sheets[0].cells.C4.v = 5; }), 'utf8');
+  const xlsx = join(folder, '表.xlsx');
+  const result = runBuild(['--base', html, '--state', join(folder, 'state.txt'), '--xlsx', xlsx]);
+  assert.equal(result.status, 0, result.stderr);
+  const cells = xlsxOf(xlsx).sheets[0].cells;
+  assert.deepEqual([cells.B4.value, cells.C4.value, cells.E4.value], ['ブラウザーで直した', 5, 60000], '数式の値も、編集した後の値で計算する');
+  assert.equal(readFileSync(html, 'utf8'), original);
+  assert.deepEqual(listHtml(folder), ['表.html']);
+});
+
+test('--xlsx は、ブックJSON（--input）からも作れ、同じ名前のxlsxがあると年月日時分秒を付けた名前で残す', () => {
+  const folder = newFolder('xlsx-input');
+  const json = join(folder, 'b.json'), xlsx = join(folder, '一覧.xlsx');
+  const outputs = [];
+  for (const v of ['1回目', '2回目']) {
+    writeFileSync(json, JSON.stringify(blankBook({sheet: {cells: {A1: {t: 's', v}}}})), 'utf8');
+    const result = runBuild(['--input', json, '--xlsx', xlsx]);
+    assert.equal(result.status, 0, result.stderr);
+    outputs.push(result.stdout);
+  }
+  const names = listXlsx(folder);
+  assert.equal(names.length, 2, '最新の1つと、以前の1つ');
+  const previous = names.find(n => /^一覧_\d{14}\.xlsx$/.test(n));
+  assert.ok(previous, names.join(', '));
+  assert.match(outputs[1], new RegExp('以前の内容: .*' + previous.replace('.', '\.')));
+  assert.equal(xlsxOf(xlsx).sheets[0].cells.A1.value, '2回目');
+  assert.equal(xlsxOf(join(folder, previous)).sheets[0].cells.A1.value, '1回目');
+});
+
+test('--xlsx でも、ブックIDやリビジョンが合わない状態テキストでは、何も書き出さずに止まる', () => {
+  const folder = newFolder('xlsx-mismatch');
+  const html = buildBook(fixture('book'), folder, '表.html');
+  writeFileSync(join(folder, 'state.txt'), stateText(html, (w, state) => { state.workbookId = 'other'; }), 'utf8');
+  const result = runBuild(['--base', html, '--state', join(folder, 'state.txt'), '--xlsx', join(folder, '表.xlsx')]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /ブックIDまたはリビジョンが一致しません/);
+  assert.deepEqual(listXlsx(folder), []);
+});
+
+test('--xlsx は --output・--extract-json と一緒には使えず、数式として書けない式があると注意を出してから書き出す', () => {
+  const folder = newFolder('xlsx-args');
+  const json = join(folder, 'b.json'), xlsx = join(folder, 'b.xlsx');
+  writeFileSync(json, JSON.stringify(blankBook({sheet: {cells: {A1: {t: 'f', f: '=SUM(A2:A3'}}}})), 'utf8');
+  for (const extra of [['--output', join(folder, 'b.html')], ['--extract-json']]) {
+    const result = runBuild(['--input', json, '--xlsx', xlsx, ...extra]);
+    assert.equal(result.status, 2, extra.join(' '));
+    assert.match(result.stderr, /--xlsx/);
+  }
+  assert.deepEqual(listXlsx(folder), []);
+  const html = buildBook(blankBook(), folder, 'base.html');
+  const alone = runBuild(['--base', html]);
+  assert.equal(alone.status, 2, 'xlsxを作らないときは、--base に --state が要る');
+  const result = runBuild(['--input', json, '--xlsx', xlsx]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /^注意: .*A1.*=SUM\(A2:A3/m);
+  assert.equal(xlsxOf(xlsx).sheets[0].cells.A1.value, '=SUM(A2:A3');
 });

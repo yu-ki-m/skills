@@ -76,3 +76,4 @@ test('copying a range that holds only part of a merged cell takes just that rang
   const md=C.markdown(w,s,C.range('B1:B4'));assert.ok(md.text.includes('品名')&&!md.text.includes('題名'));
   const left=C.rangeData(w,s,C.range('A1:A2'));assert.deepEqual([left.cells.A1.v,left.merges],['題名',[]],'a merged cell whose top-left is in the range gives its value, unmerged');
   assert.deepEqual(C.rangeData(w,s,C.range('A10:C12')).merges,[{r1:1,c1:0,r2:2,c2:2}],'a merged cell wholly inside the range stays merged');});
+test('formula syntax can be checked without evaluating it (an xlsx must not hold a formula Excel cannot read)',()=>{for(const f of ['=SUM(A1:A3)*2','=vlookup(A1,B1:C3,2,FALSE)','=IF(A1>0,"正",-A1)','=A1%&"円"','=--A1','=TRUE'])assert.doesNotThrow(()=>C.evalFormula(f,null,true),f);for(const f of ['=SUM(A1:A3','=1+','=A1 B1','="abc','=Sheet2!A1','=(1','=1)','='])assert.throws(()=>C.evalFormula(f,null,true),f);});

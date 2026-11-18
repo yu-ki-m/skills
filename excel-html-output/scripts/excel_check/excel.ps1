@@ -1,13 +1,16 @@
-# Desktop Excel side of verify_excel_paste.py (Windows, PowerShell 7, Excel installed).
+# Desktop Excel side of verify_excel_paste.py and verify_xlsx.py (Windows, PowerShell 7, Excel installed).
 #   native : build the sheet natively in Excel from the workbook JSON, dump it, let Excel copy it and paste
 #            Excel's own HTML back (what an Excel-to-Excel HTML paste gives)
 #   paste  : put the given HTML on the clipboard exactly as Chrome/Edge do and paste it at the range origin
+#   xlsx   : open the .xlsx file (read-only) and dump the range of the sheet named SheetName, with the sheet's column
+#            widths, row heights, view and pictures; then build the sheet natively and dump it. No clipboard.
 # Dumps every cell of the range (value, type, formula, format, font, fill, alignment, borders, merge, link).
 param(
-  [Parameter(Mandatory)][ValidateSet('native', 'paste')][string]$Mode,
+  [Parameter(Mandatory)][ValidateSet('native', 'paste', 'xlsx')][string]$Mode,
   [Parameter(Mandatory)][string]$Out, [Parameter(Mandatory)][int]$R1, [Parameter(Mandatory)][int]$C1,
   [Parameter(Mandatory)][int]$R2, [Parameter(Mandatory)][int]$C2,
-  [string]$Workbook, [string]$Sheet, [string]$Html, [string]$Text, [string]$CfHtml, [switch]$Pdf)
+  [string]$Workbook, [string]$Sheet, [string]$Html, [string]$Text, [string]$CfHtml, [switch]$Pdf,
+  [string]$Xlsx, [string]$SheetName, [int]$Rows, [int]$Cols)
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\clip.ps1"
 $enc = New-Object System.Text.UTF8Encoding($false)
@@ -104,10 +107,36 @@ function Build-Native($xl) {
   return $ws
 }
 
+# The sheet's sizes, view and pictures as Excel shows them. Excel writes a repair log (error*.xml in TEMP) when it has to
+# repair a file to open it; such logs that appear while opening are reported. The file is opened before any other book:
+# with another book already open, hidden Excel reports frozen panes of 2 rows and 1 column as SplitRow 1 and SplitColumn 0
+# (desktop Excel 16.0), although the panes themselves are right.
+function Open-Xlsx($xl) {
+  $before = @(Get-ChildItem $env:TEMP -Filter 'error*.xml' -ErrorAction SilentlyContinue | ForEach-Object FullName)
+  $wb = $xl.Workbooks.Open($Xlsx, 0, $true)
+  $repairs = @(Get-ChildItem $env:TEMP -Filter 'error*.xml' -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.FullName } |
+    ForEach-Object { Get-Content -Raw -Encoding utf8 $_.FullName })
+  $active = $wb.ActiveSheet.Name
+  $names = @(foreach ($s in $wb.Worksheets) { $s.Name })
+  $ws = $wb.Worksheets.Item($SheetName); $ws.Activate(); $win = $wb.Windows.Item(1)
+  $pictures = @(foreach ($sh in $ws.Shapes) { [ordered]@{ name = $sh.Name; type = $sh.Type; topLeft = $sh.TopLeftCell.Address(0, 0)
+    left = $sh.Left; top = $sh.Top; width = $sh.Width; height = $sh.Height; placement = $sh.Placement } })
+  $info = [ordered]@{ repairs = $repairs; activeSheet = $active; sheetNames = $names; freeze = $win.FreezePanes; splitRow = $win.SplitRow
+    splitColumn = $win.SplitColumn; gridlines = $win.DisplayGridlines; zoom = $win.Zoom
+    colWidths = @(for ($c = 1; $c -le $Cols; $c++) { $ws.Columns.Item($c).Width }); rowHeights = @(for ($r = 1; $r -le $Rows; $r++) { $ws.Rows.Item($r).RowHeight })
+    pictures = $pictures; activeCell = $xl.ActiveCell.Address(0, 0); selection = $xl.Selection.Address(0, 0) }
+  [IO.File]::WriteAllText("$Out.sheet.json", ($info | ConvertTo-Json -Depth 6), $enc)
+  Save-Dump $xl $ws "$Out.xlsx.json"
+}
+
 $xl = New-Object -ComObject Excel.Application
 $xl.Visible = $false; $xl.DisplayAlerts = $false
 try {
-  if ($Mode -eq 'native') {
+  if ($Mode -eq 'xlsx') {
+    Open-Xlsx $xl
+    $ws = Build-Native $xl
+    Save-Dump $xl $ws "$Out.native.json"
+  } elseif ($Mode -eq 'native') {
     $ws = Build-Native $xl
     Save-Dump $xl $ws "$Out.native.json"
     $ws.Range($ws.Cells.Item($R1, $C1), $ws.Cells.Item($R2, $C2)).Copy() | Out-Null

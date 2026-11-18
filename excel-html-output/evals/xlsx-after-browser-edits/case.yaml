@@ -1,0 +1,9 @@
+schema_version: "1.1"
+name: xlsx-after-browser-edits
+expected_outcome: |
+  編集した後の表が入った .xlsx ファイルが作業フォルダーにでき、デスクトップ版Excelで修復なしに開ける。
+  編集内容がすべて入っている（ノートPC（メモリ32GB）、追加行 00019 ヘッドセット、追加シート「貸出記録」の 00015・中村、
+  00014 の行の「修理中」の太字と塗り、品名列 230px と 6行目 44px）。Excelで開くと購入金額の合計は 570,600 になる。
+  依頼されたのはxlsxだけなので、元の 備品管理表.html は書き換えられていない。
+context:
+  scaffold_script: place-files.sh

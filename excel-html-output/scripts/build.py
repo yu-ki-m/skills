@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build an offline HTML workbook or apply a version-matched state export.
+"""Build an offline HTML workbook or apply a version-matched state export, or write the workbook as an .xlsx file.
 
 Python 3.10+ and Node.js 18+; no pip/npm packages. Validation uses the exact
 same model validator as the browser, and a state export (TOON, the page's
 default, or JSON) is read by the same code that wrote it (assets/core.js).
+The .xlsx file is written by scripts/xlsx.cjs from the same workbook.
 Never executes input HTML or cell data.
 An existing output file is never overwritten: it is first renamed to
 <name>_<YYYYMMDDHHMMSS><suffix>, and the new content takes the original name.
@@ -55,6 +56,19 @@ def read_state(path):
     """The state object of a 「AIに渡す」 text, TOON or JSON. A text cut short or changed inside is refused."""
     text = Path(path).read_text(encoding="utf-8-sig")
     return json.loads(run_core("process.stdout.write(JSON.stringify(C.readStateText(s)));", text))
+
+
+def to_xlsx(workbook):
+    """The .xlsx file of workbook (bytes, from scripts/xlsx.cjs) and its cautions, each a line starting with 注意:."""
+    try:
+        result = subprocess.run(["node", str(ROOT / "scripts" / "xlsx.cjs")], input=json.dumps(workbook, ensure_ascii=False).encode("utf-8"),
+                                capture_output=True, check=False)
+    except FileNotFoundError as exc:
+        raise ValueError("Node.js 18+ が必要です。") from exc
+    messages = result.stderr.decode("utf-8", "replace").strip()
+    if result.returncode:
+        raise ValueError(messages)
+    return result.stdout, [line for line in messages.splitlines() if line.strip()]
 
 
 def read_base(path):
@@ -112,8 +126,8 @@ def previous_name(path):
         moment += timedelta(seconds=1)
 
 
-def write_keeping_previous(path, text):
-    """Writes text to path. If path exists, it is renamed to previous_name(path) first.
+def write_keeping_previous(path, content):
+    """Writes content (text, or bytes) to path. If path exists, it is renamed to previous_name(path) first.
 
     The new content is written to a temporary file beforehand, so a failure leaves the old file in place.
     Returns the path of the renamed old file, or None when there was nothing to keep.
@@ -122,7 +136,10 @@ def write_keeping_previous(path, text):
         raise ValueError(f"出力先がフォルダーです: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temp.write_text(text, encoding="utf-8")
+    if isinstance(content, bytes):
+        temp.write_bytes(content)
+    else:
+        temp.write_text(content, encoding="utf-8")
     previous = None
     try:
         if path.exists():
@@ -145,20 +162,42 @@ def main():
     parser.add_argument("--output", type=Path,
                         help="出力先。--base と --state で反映するときは省略でき、省略すると --base と同じファイルに書き出す")
     parser.add_argument("--extract-json", action="store_true", help="状態適用後のJSONを出力（AIによる追加編集用）")
+    parser.add_argument("--xlsx", type=Path,
+                        help="Excelのファイル（.xlsx）をここに書き出す（HTMLは書き出さない）。--input、--base（生成したHTMLの表）、"
+                             "--base と --state（ブラウザーで編集した後の表）のどれかと使う")
     args = parser.parse_args()
-    if bool(args.input) == bool(args.base) or bool(args.base) != bool(args.state):
-        parser.error("--input、または--baseと--stateの組を指定してください。")
-    output_path = args.output or (args.base if args.base and not args.extract_json else None)
-    if output_path is None:
-        parser.error("--output を指定してください。")
+    if args.xlsx:
+        if args.output or args.extract_json:
+            parser.error("--xlsx は --output・--extract-json と一緒には使えません。")
+        if bool(args.input) == bool(args.base) or (args.state and not args.base):
+            parser.error("--xlsx には、--input か --base（ブラウザーで編集した後の表なら --state も）を指定してください。")
+        output_path = args.xlsx
+    else:
+        if bool(args.input) == bool(args.base) or bool(args.base) != bool(args.state):
+            parser.error("--input、または--baseと--stateの組を指定してください。")
+        output_path = args.output or (args.base if args.base and not args.extract_json else None)
+        if output_path is None:
+            parser.error("--output を指定してください。")
     try:
-        workbook = read_json(args.input) if args.input else apply_state(args.base, args.state)
+        if args.input:
+            workbook = read_json(args.input)
+        else:
+            workbook = apply_state(args.base, args.state) if args.state else read_base(args.base)
         validate(workbook)
-        output = json.dumps(workbook, ensure_ascii=False, indent=2) if args.extract_json else build(workbook)
+        if args.xlsx:
+            output, cautions = to_xlsx(workbook)
+            for caution in cautions:
+                print(caution, file=sys.stderr)
+        else:
+            output = json.dumps(workbook, ensure_ascii=False, indent=2) if args.extract_json else build(workbook)
         previous = write_keeping_previous(output_path, output)
         print(str(output_path.resolve()))
         if previous:
             print("以前の内容: " + str(previous.resolve()))
+    except PermissionError as exc:
+        print(f"エラー: 書き出し先のファイルを書き換えられません。Excelなどで開いているなら、閉じてからやり直してください（{exc.filename}）。",
+              file=sys.stderr)
+        return 1
     except (ValueError, KeyError, TypeError, OSError) as exc:
         print("エラー: " + str(exc), file=sys.stderr)
         return 1

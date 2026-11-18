@@ -137,7 +137,8 @@
     catch(e){value=isErr(e.message)?e.message:'#VALUE!';}
     stack.delete(key); if(typeof value==='number'&&!Number.isFinite(value))value='#NUM!';cache.set(key,value); return value;
   }
-  function evalFormula(formula, ref) {
+  // parseOnly: only read the formula, without evaluating it. It throws when the formula cannot be read at all.
+  function evalFormula(formula, ref, parseOnly=false) {
     const pattern=/\s*(?:(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+)|("(?:[^"]|"")*")|(\$?[A-Z]{1,3}\$?[1-9]\d*)|([A-Z_][A-Z_0-9.]*)|(<=|>=|<>|[+\-*/^%&=<>(),:])|(#REF!))/iy;
     const tok=[];let p=1,m;while(p<formula.length){if(!formula.slice(p).trim())break;pattern.lastIndex=p;m=pattern.exec(formula);if(!m)throw Error('#NAME?');tok.push(m[1]?{k:'num',v:+m[1]}:m[2]?{k:'str',v:m[2].slice(1,-1).replace(/""/g,'"')}:m[3]?{k:'ref',v:m[3].toUpperCase()}:m[4]?{k:'id',v:m[4].toUpperCase()}:{k:m[5]||m[6],v:m[5]||m[6]});p=pattern.lastIndex;}
     let i=0;const peek=()=>tok[i]?.k, eat=k=>{if(peek()!==k)throw Error('#VALUE!');return tok[i++];};
@@ -162,7 +163,7 @@
       const args=n.args.map(run).flat();for(const v of args)if(isErr(v))throw Error(v);const nums=args.filter(x=>typeof x==='number');
       switch(n.name){case 'SUM':return nums.reduce((a,b)=>a+b,0);case 'AVERAGE':if(!nums.length)throw Error('#DIV/0!');return nums.reduce((a,b)=>a+b,0)/nums.length;case 'MIN':return nums.length?Math.min(...nums):0;case 'MAX':return nums.length?Math.max(...nums):0;case 'COUNT':return nums.length;case 'COUNTA':return args.filter(x=>x!=='').length;case 'ROUNDDOWN':case 'ROUNDUP':{if(args.length!==2)throw Error('#VALUE!');const x=number(args[0]),f=10**Math.trunc(number(args[1])),a=+(Math.abs(x)*f).toPrecision(15);return Math.sign(x)*(n.name==='ROUNDUP'?Math.ceil(a):Math.floor(a))/f;}case 'INT':if(args.length!==1)throw Error('#VALUE!');return Math.floor(+number(args[0]).toPrecision(15));case 'ABS':if(args.length!==1)throw Error('#VALUE!');return Math.abs(number(args[0]));case 'MOD':{if(args.length!==2)throw Error('#VALUE!');const a=number(args[0]),b=number(args[1]);if(b===0)throw Error('#DIV/0!');return a-b*Math.floor(a/b);}case 'AND':case 'OR':{const v=args.filter(x=>typeof x!=='string').map(x=>!!number(x));if(!v.length)throw Error('#VALUE!');return n.name==='AND'?v.every(Boolean):v.some(Boolean);}case 'NOT':if(args.length!==1)throw Error('#VALUE!');return !number(args[0]);case 'ROUND':if(args.length!==2)throw Error('#VALUE!');return Math.sign(number(args[0]))*Math.round((Math.abs(args[0])+Number.EPSILON)*10**number(args[1]))/10**args[1];default:throw Error('#NAME?');}
     }
-    const ast=expression();if(i!==tok.length)throw Error('#NAME?');const result=run(ast);return Array.isArray(result)?'#VALUE!':result;
+    const ast=expression();if(i!==tok.length)throw Error('#NAME?');if(parseOnly)return ast;const result=run(ast);return Array.isArray(result)?'#VALUE!':result;
   }
   function display(value,fmt='General') {
     if(isErr(value)||typeof value==='string')return value;if(typeof value==='boolean')return value?'TRUE':'FALSE';
@@ -401,5 +402,5 @@
     return TOON.decode(end > nl ? raw.slice(nl + 1, end) : '', {firstLine: 2});
   }
   return {SCHEMA,SIZE_LIMITS,FORMATS,MSO_FORMAT,BORDER_XL,DEFAULT,stateText,readStateText,selectionArea,splitsMerge,xlCss,excelWouldConvert,blockFormula,generalAlign,
-    cssUnescape,parseDecls,parseRules,cssHex,formatFromMso,borderFromCss,styleFromDecls,valueFromDisplay,clone,esc,colName,addr,coord,rect,range,within,overlap,same,each,get,style,mergeAt,expanded,validate,width,height,infer,raw,isErr,calculate,evalFormula,display,css,shiftFormula,rangeData,clipboard,markdown,parseTSV,paste};
+    fontCharset,cssUnescape,parseDecls,parseRules,cssHex,formatFromMso,borderFromCss,styleFromDecls,valueFromDisplay,clone,esc,colName,addr,coord,rect,range,within,overlap,same,each,get,style,mergeAt,expanded,validate,width,height,infer,raw,isErr,calculate,evalFormula,display,css,shiftFormula,rangeData,clipboard,markdown,parseTSV,paste};
 });
