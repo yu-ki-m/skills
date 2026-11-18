@@ -1,9 +1,10 @@
 // scripts/build.py：検査、埋め込み、リビジョン、以前の内容を残す書き出し、状態テキストの反映、--extract-json、--xlsx。
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {after, before, test} from 'node:test';
-import {blankBook, buildBook, Core, embeddedBook, fixture, removeDir, runBuild, SKILL_ROOT, tempDir} from './lib/workbook.mjs';
+import {blankBook, buildBook, Core, embeddedBook, findPython, fixture, removeDir, runBuild, SKILL_ROOT, tempDir} from './lib/workbook.mjs';
 import {readXlsx} from './lib/xlsx.mjs';
 
 let dir;
@@ -226,6 +227,26 @@ test('--xlsx は --output・--extract-json と一緒には使えず、数式と�
   assert.equal(xlsxOf(xlsx).sheets[0].cells.A1.value, '=SUM(A2:A3');
 });
 
+test('書き出し先のxlsxがExcelで開かれていて書き換えられないときは、閉じるよう伝えて止まり、元のファイルを残す', () => {
+  // Windowsは、Excelが開いているファイルの名前の変更や置き換えを許さない（PermissionError）。その状態を、
+  // 書き出しの2つの段階（元のファイルの名前を変える・新しい中身に置き換える）のそれぞれで失敗させて作る。
+  for (const [step, patch] of [['名前の変更', 'rename'], ['置き換え', 'replace']]) {
+    const folder = newFolder('xlsx-locked-' + patch), json = join(folder, 'b.json'), xlsx = join(folder, '一覧.xlsx');
+    writeFileSync(json, JSON.stringify(blankBook({sheet: {cells: {A1: {t: 's', v: '新しい表'}}}})), 'utf8');
+    writeFileSync(xlsx, 'Excelで開いている元のファイル', 'utf8');
+    const code = 'import pathlib, sys\nsys.dont_write_bytecode = True\nsys.path.insert(0, sys.argv[1])\nimport build\n' +
+      `real = pathlib.Path.${patch}\ndef locked(self, target):\n    if str(self).endswith(".xlsx") or str(self).endswith(".tmp"):\n        raise PermissionError(13, "使用中", str(self))\n    return real(self, target)\n` +
+      `pathlib.Path.${patch} = locked\nsys.argv = ["build.py", "--input", sys.argv[2], "--xlsx", sys.argv[3]]\nsys.exit(build.main())`;
+    const py = findPython();
+    const run = spawnSync(py.command, [...py.args, '-c', code, join(SKILL_ROOT, 'scripts'), json, xlsx], {encoding: 'utf8', timeout: 60000,
+      env: {...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1'}});
+    assert.equal(run.status, 1, step + ': ' + run.stderr);
+    assert.match(run.stderr, /書き出し先のファイルを書き換えられません。Excelなどで開いているなら、閉じてからやり直してください/, step);
+    assert.equal(readFileSync(xlsx, 'utf8'), 'Excelで開いている元のファイル', step + 'で失敗しても、元のファイルはその名前のまま');
+    assert.deepEqual(readdirSync(folder).sort(), ['b.json', '一覧.xlsx'], step + 'で失敗しても、書きかけのファイルや名前を変えた元のファイルを残さない');
+  }
+});
+
 test('--from-xlsx は、Excelのファイルから表のHTMLを作り、移せなかったものを「注意:」で知らせる', () => {
   const folder = newFolder('from-xlsx');
   const html = join(folder, '見積.html');
@@ -248,6 +269,9 @@ test('--from-xlsx は他の入力と一緒には使えず、xlsx として読め
   const both = runBuild(['--from-xlsx', join(SKILL_ROOT, 'tests', 'fixtures', 'excel-made.xlsx'), '--input', join(folder, 'b.json'), '--output', join(folder, 'x.html')]);
   assert.equal(both.status, 2);
   assert.match(both.stderr, /--from-xlsx/);
+  const noOutput = runBuild(['--from-xlsx', join(SKILL_ROOT, 'tests', 'fixtures', 'excel-made.xlsx')]);
+  assert.equal(noOutput.status, 2);
+  assert.match(noOutput.stderr, /--from-xlsx には --output を指定してください/);
   writeFileSync(join(folder, 'not.xlsx'), 'これはxlsxではない', 'utf8');
   const bad = runBuild(['--from-xlsx', join(folder, 'not.xlsx'), '--output', join(folder, 'x.html')]);
   assert.equal(bad.status, 1);

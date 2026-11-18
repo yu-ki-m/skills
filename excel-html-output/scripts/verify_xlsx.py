@@ -103,7 +103,7 @@ def check_sheet(workbook, sheet, info, source_notes=None):
     for r, got in enumerate(heights):
         want = height_px(sheet, r) * 0.75
         if abs(got - want) > SIZE_TOLERANCE:
-            differ(f'{r + 1} 行目の高さ（pt）', want, got, row_reason.get(r + 1))
+            differ(f'{r + 1} 行目の高さ（pt）', want, got, row_reason.get(r + 1) or reasons.get('rowHeightAll'))
     freeze = sheet.get('freeze') or {}
     rows, cols = freeze.get('rows', 0), freeze.get('cols', 0)
     want_freeze = {'freeze': bool(rows or cols), 'splitRow': rows, 'splitColumn': cols} if rows or cols else {'freeze': False}
@@ -140,6 +140,36 @@ def check_sheet(workbook, sheet, info, source_notes=None):
         if bad:
             differ(f'画像 {i + 1}（{image["id"]}）の' + '・'.join(bad), want, have)
     return problems, expected
+
+
+def page_font(workbook, sheet, address):
+    """The font name the page gives the cell: the book's default style, then the sheet's, then the cell's own."""
+    style = {**(workbook.get('defaultStyle') or {}), **(sheet.get('defaultStyle') or {}), **((sheet['cells'].get(address) or {}).get('s') or {})}
+    return style.get('font', 'Yu Gothic')
+
+
+def split_cells(unexpected, workbook, sheet, source_notes=None):
+    """(unexpected, conflicts, expected) of the cell differences verify_excel_paste.compare found.
+
+    conflicts are borders two neighbouring cells give differently (a data problem Excel cannot keep); expected are the
+    fields the reader replaced on purpose (source_notes: its notes for the sheet; None for a file this skill wrote).
+    A cell whose text needs another font for some characters (Japanese text in Arial) has no single font name when it is
+    built in Excel; when the file's font is then the page's, that is no difference.
+    """
+    notes = (source_notes or {}).get('cells', {})
+    replaced = {a: {f for n in ns for f in n['fields']} for a, ns in notes.items()}
+    why = {a: '、'.join(dict.fromkeys(n['reason'] for n in ns)) for a, ns in notes.items()}
+    cells, conflicts, expected = [], [], []
+    for d in unexpected:
+        if d['field'] == 'font' and d['excel'] is None and d['pasted'] == page_font(workbook, sheet, d['cell']):
+            continue
+        if d['field'] in replaced.get(d['cell'], set()):
+            expected.append({**d, 'reason': why[d['cell']]})
+        elif 'cause' in d:
+            conflicts.append(d)
+        else:
+            cells.append(d)
+    return cells, conflicts, expected
 
 
 def reader_notes(xlsx):
@@ -202,16 +232,7 @@ def main():
             raise
         unexpected, _, _ = paste.compare(str(base) + '.native.json', str(base) + '.xlsx.json', notes)
         source_notes = (import_notes or {}).get(sheet['name'], {'cells': {}, 'sheet': []}) if args.source else None
-        replaced = {a: {f for n in ns for f in n['fields']} for a, ns in (source_notes or {}).get('cells', {}).items()}
-        why = {a: '、'.join(dict.fromkeys(n['reason'] for n in ns)) for a, ns in (source_notes or {}).get('cells', {}).items()}
-        cells, conflicts, expected = [], [], []
-        for d in unexpected:
-            if d['field'] in replaced.get(d['cell'], set()):
-                expected.append({**d, 'reason': why[d['cell']]})
-            elif 'cause' in d:
-                conflicts.append(d)
-            else:
-                cells.append(d)
+        cells, conflicts, expected = split_cells(unexpected, workbook, sheet, source_notes)
         sheet_info = json.loads(Path(str(base) + '.sheet.json').read_text(encoding='utf-8-sig'))
         sheet_problems, sheet_expected = check_sheet(workbook, sheet, sheet_info, source_notes)
         total += len(cells) + len(sheet_problems)

@@ -128,11 +128,11 @@ class Strings {
 }
 
 /**
- * The <c> element of the cell at (r, c), or '' when the cell has neither a value nor a format of its own.
+ * The <c> element of the cell at (r, c), or '' when the cell has no value and Excel's Normal style is its format.
  * ctx holds what the whole book shares: styles, strings, warnings, and values (formula results, kept like the page's
  * renderCache so that every formula is computed once and the same way as on the page).
  */
-function cellXml(w, s, r, c, plain, ctx) {
+function cellXml(w, s, r, c, ctx) {
   const {styles, strings, warnings} = ctx;
   const merge = C.mergeAt(s, r, c), owner = merge ? C.get(s, merge.r1, merge.c1) : C.get(s, r, c);
   const cell = merge && (r !== merge.r1 || c !== merge.c1) ? {t: 's', v: ''} : owner;
@@ -156,8 +156,8 @@ function cellXml(w, s, r, c, plain, ctx) {
   const textValue = asText ?? (cell.t === 's' ? cell.v : null);
   const quotePrefix = textValue !== null && textValue !== '' && st.numFmt !== '@' && C.excelWouldConvert(textValue);
   const link = !!owner.link;
-  if (cell.t === 's' && cell.v === '' && !link && JSON.stringify({st, edges}) === plain) return '';
   const xf = styles.xf(st, edges, {link, quotePrefix}), at = `<c r="${a}"` + (xf ? ` s="${xf}"` : '');
+  if (cell.t === 's' && cell.v === '' && !link && !xf) return '';
   if (textValue !== null) return textValue === '' ? `${at}/>` : `${at} t="s"><v>${strings.id(textValue)}</v></c>`;
   if (cell.t === 'n') return `${at}><v>${num(cell.v)}</v></c>`;
   if (cell.t === 'b') return `${at} t="b"><v>${cell.v ? 1 : 0}</v></c>`;
@@ -198,15 +198,17 @@ const rels = list => HEAD + `<Relationships xmlns="${PACKAGE_REL}">` + list.map(
 /** The worksheet part of sheet s (the index-th sheet), and the parts it refers to. */
 function sheetParts(w, s, index, ctx) {
   const isActive = s.id === w.activeSheet, view = w.view || {}, zoom = Math.round(view.zoom || 100);
-  const plain = JSON.stringify({st: C.style(w, s, {}), edges: {borderTop: 'none', borderRight: 'none', borderBottom: 'none', borderLeft: 'none'}});
   const used = new Map(), mark = (r, c) => { if (!used.has(r)) used.set(r, new Set()); used.get(r).add(c); };
   for (const key of Object.keys(s.cells)) mark(...C.coord(key));
   for (const m of s.merges) C.each(m, mark);
+  // The page shows a cell without a value in the default format (defaultStyle), and what is typed there takes it. When
+  // that format is not Excel's Normal style, every cell of the table is written with it (cells outside stay Normal).
+  if (JSON.stringify(C.style(w, s, {})) !== JSON.stringify(C.DEFAULT)) C.each({r1: 0, c1: 0, r2: s.rows - 1, c2: s.cols - 1}, mark);
   const rows = [];
   let box = null;
   for (let r = 0; r < s.rows; r++) {
     const cells = [...(used.get(r) || [])].sort((a, b) => a - b).map(c => {
-      const xml = cellXml(w, s, r, c, plain, ctx);
+      const xml = cellXml(w, s, r, c, ctx);
       if (xml) box = box ? C.rect([Math.min(box.r1, r), Math.min(box.c1, c)], [Math.max(box.r2, r), Math.max(box.c2, c)]) : C.rect([r, c]);
       return xml;
     }).join('');

@@ -27,12 +27,20 @@ const PALETTE = ('000000 FFFFFF FF0000 00FF00 0000FF FFFF00 FF00FF 00FFFF 000000
 // The Office theme's colours (2013-2022) in Excel's theme-index order (lt1, dk1, lt2, dk2, accent1-6, hlink, folHlink),
 // for a file without a theme part.
 const OFFICE_THEME = ['FFFFFF', '000000', 'E7E6E6', '44546A', '4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5', '70AD47', '0563C1', '954F72'];
+// A theme's system colour shows as the colour Windows has for it (not the lastClr written in the file; measured).
+const SYSTEM_COLOR = {windowText: '000000', window: 'FFFFFF'};
 // Column widths are counted in the widest digit of the Normal style's font. Its width at 96dpi for 11pt fonts; other
 // sizes scale with the size. For Yu Gothic 11pt it is 8px (10px at 120dpi, measured in desktop Excel 16.0). Fonts whose
 // width rounds differently at other display scalings (MS PGothic, Meiryo, Calibri ...) give approximate widths there.
 const DIGIT_PX_11 = {'游ゴシック': 8, 'yu gothic': 8, '游ゴシック light': 8, 'yu gothic light': 8, '游明朝': 8, 'yu mincho': 8,
   'ｍｓ ｐゴシック': 8, 'ms pgothic': 8, 'ｍｓ ゴシック': 8, 'ms gothic': 8, 'ｍｓ 明朝': 8, 'ms mincho': 8, 'ｍｓ ｐ明朝': 8, 'ms pmincho': 8,
   'メイリオ': 9, 'meiryo': 9, 'meiryo ui': 9, 'calibri': 7, 'aptos narrow': 7, 'aptos': 7, 'arial': 8};
+// The height (pt) of a row that fits the Normal style's font of 11pt, at 100% display scaling (other sizes in
+// proportion). Excel fits rows to it unless the sheet's default height is marked as set (customHeight). These are the
+// commonly known values at 100%; at 125% desktop Excel 16.0 showed 18, 14.4 and 13.2pt, within the checker's 0.8pt.
+const ROW_PT_11 = {'yu gothic': 18.75, 'yu mincho': 18.75, 'calibri': 15, 'aptos': 15, 'ms pgothic': 13.5, 'ms gothic': 13.5};
+// The height of an empty row in a sheet that gives no default height: Excel's own (Yu Gothic 11pt), whatever the font.
+const EXCEL_ROW_PT = 18.75;
 const BORDER = {hair: '0.5px solid', thin: '1px solid', medium: '2px solid', thick: '3px solid', dashed: '1px dashed',
   mediumDashed: '2px dashed', dotted: '1px dotted', double: '3px double'};
 const NEAR_BORDER = {dashDot: '1px dashed', dashDotDot: '1px dashed', mediumDashDot: '2px dashed', mediumDashDotDot: '2px dashed', slantDashDot: '2px dashed'};
@@ -195,11 +203,13 @@ const plain = s => s.replace(/\[\$([^\]-]*)(?:-[0-9A-Fa-f]+)?\]/g, '$1').replace
 function mapFormat(code) {
   if (/^(General|G\/標準)$/i.test(code.trim())) return {fmt: 'General', exact: true};
   const parts = sections(code), first = plain(parts[0]);
-  // Negative numbers: the page puts "-" in front. A second section shows them the same way only when it is "-" and the
-  // first section, without a colour ([Red] and the like).
-  const sameNegative = parts.length === 1 || parts.length === 2 && plain(parts[1]) === '-' + first && !/\[(?!\$)[^\]]*\]/.test(parts[1]);
+  // A colour, a condition or a numeral system ([Red], [>=100], [DBNum1]; not a currency or locale, [$...]) shows numbers
+  // otherwise than the page. Negative numbers: the page puts "-" in front, so a second section shows them the same way
+  // only when it is "-" and the first section.
+  const marked = s => /\[(?!\$)[^\]]*\]/.test(s);
+  const same = !marked(parts[0]) && (parts.length === 1 || parts.length === 2 && plain(parts[1]) === '-' + first && !marked(parts[1]));
   const known = C.FORMATS.find(f => f === first);
-  if (known) return {fmt: known, exact: sameNegative};
+  if (known) return {fmt: known, exact: same};
   const lower = first.toLowerCase(), decimals = (/\.(0+)/.exec(first) || [, ''])[1].length;
   let fmt;
   if (/[hs]/.test(lower.replace(/"[^"]*"/g, '')) && !/[yd]/.test(lower)) fmt = 'General';
@@ -216,6 +226,9 @@ function mapFormat(code) {
 
 // ---- Styles -----------------------------------------------------------------------------------------------------------
 
+// The font of a file without fonts (or without a styles part).
+const NO_FONT = {name: 'Yu Gothic', size: 11, bold: false, italic: false, strike: false, underline: null, color: '#000000'};
+
 function readStyles(xml, book) {
   const formats = {...BUILTIN_FORMAT};
   for (const f of kids(kid(xml, 'numFmts'), 'numFmt')) formats[f.attrs.numFmtId] = f.attrs.formatCode;
@@ -223,7 +236,8 @@ function readStyles(xml, book) {
   const fonts = kids(kid(xml, 'fonts'), 'font').map(f => ({
     // The page names fonts in English, as its ribbon lists them: 游ゴシック is Yu Gothic.
     name: (n => C.FONT_ALIAS[n] || n)(kid(f, 'name')?.attrs.val || 'Yu Gothic'), size: +(kid(f, 'sz')?.attrs.val || 11), bold: flag(f, 'b'), italic: flag(f, 'i'), strike: flag(f, 'strike'),
-    underline: kid(f, 'u') ? (kid(f, 'u').attrs.val || 'single') : null, vertAlign: kid(f, 'vertAlign')?.attrs.val, color: colorOf(kid(f, 'color'), book, '#000000'),
+    underline: (u => !u || u.attrs.val === 'none' ? null : u.attrs.val || 'single')(kid(f, 'u')), // <u val="none"/> is no underline
+    vertAlign: kid(f, 'vertAlign')?.attrs.val, color: colorOf(kid(f, 'color'), book, '#000000'),
   }));
   const fills = kids(kid(xml, 'fills'), 'fill').map(f => {
     const p = kid(f, 'patternFill'), g = kid(f, 'gradientFill');
@@ -231,7 +245,7 @@ function readStyles(xml, book) {
       const stops = kids(g, 'stop').map(s => colorOf(kid(s, 'color'), book, '#ffffff'));
       return {fill: stops.length ? stops.reduce((acc, c, i) => i ? mix(c, acc, 1 / (i + 1)) : c) : 'none', note: 'グラデーションの塗りは、その平均の色1色にした'};
     }
-    const type = p?.attrs.patternType || (kid(p, 'fgColor') ? 'solid' : 'none');
+    const type = p?.attrs.patternType || 'none'; // without a pattern type, Excel does not fill (whatever the colours; measured)
     if (type === 'none') return {fill: 'none'};
     const fg = colorOf(kid(p, 'fgColor'), book, '#000000');
     if (type === 'solid') return {fill: fg};
@@ -257,10 +271,15 @@ function readStyles(xml, book) {
     alignment: kid(x, 'alignment')?.attrs || {},
   }));
   const normalXf = kid(kid(xml, 'cellStyleXfs'), 'xf');
-  const normal = {font: fonts[+(normalXf?.attrs.fontId || 0)] || fonts[0] || {name: 'Yu Gothic', size: 11}, vertical: kid(normalXf, 'alignment')?.attrs.vertical || 'bottom'};
+  // Without a Normal style (no styles part), Excel uses its own: Yu Gothic 11pt, vertically centred (Japanese Excel).
+  const normal = {font: fonts[+(normalXf?.attrs.fontId || 0)] || fonts[0] || NO_FONT, vertical: kid(normalXf, 'alignment')?.attrs.vertical || (normalXf ? 'bottom' : 'center')};
   return {formats, fonts, fills, borders, xfs, normal};
 }
 
+// The Excel spelling of the page's formats that differ from it in writing (as scripts/xlsx.cjs writes them).
+const EXCEL_CODE = {'¥#,##0': '"¥"#,##0'};
+// For a border side: the neighbouring cell (rows, columns away) and its side that is the same line in Excel.
+const NEIGHBOUR_SIDE = {bTop: [-1, 0, 'bBottom'], bBottom: [1, 0, 'bTop'], bLeft: [0, -1, 'bRight'], bRight: [0, 1, 'bLeft']};
 const HORIZONTAL = {general: 'general', left: 'left', center: 'center', right: 'right', fill: 'left', justify: 'left', distributed: 'center', centerContinuous: 'center'};
 const VERTICAL = {top: 'top', center: 'middle', bottom: 'bottom', justify: 'middle', distributed: 'middle'};
 
@@ -268,8 +287,8 @@ const VERTICAL = {top: 'top', center: 'middle', bottom: 'bottom', justify: 'midd
 function styleOf(styles, index) {
   const cache = styles.cache || (styles.cache = new Map());
   if (cache.has(index)) return cache.get(index);
-  const xf = styles.xfs[index] || styles.xfs[0] || {numFmtId: 0, fontId: 0, fillId: 0, borderId: 0, alignment: {}};
-  const font = styles.fonts[xf.fontId] || styles.fonts[0], fill = styles.fills[xf.fillId] || {fill: 'none'}, border = styles.borders[xf.borderId] || {notes: []};
+  const xf = styles.xfs[index] || styles.xfs[0] || {numFmtId: 0, fontId: 0, fillId: 0, borderId: 0, alignment: {vertical: styles.normal.vertical}};
+  const font = styles.fonts[xf.fontId] || styles.fonts[0] || NO_FONT, fill = styles.fills[xf.fillId] || {fill: 'none'}, border = styles.borders[xf.borderId] || {notes: []};
   const a = xf.alignment, notes = [];
   const st = {...C.DEFAULT};
   st.font = font.name;
@@ -292,27 +311,43 @@ function styleOf(styles, index) {
   const indent = +(a.indent || 0);
   st.indent = Math.min(15, indent);
   if (indent > 15) notes.push({field: 'indent', reason: `インデント ${indent} は 15 にした`});
-  if (st.indent > 0 && st.align === 'general') st.align = 'left';
+  if (st.indent > 0 && st.align === 'general') { st.align = 'left'; notes.push({field: 'halign', reason: '「標準」の横位置のインデントは、左揃えのインデントにした'}); }
   if (+(a.textRotation || 0)) notes.push({field: null, reason: '文字の回転・縦書きは移せない'});
   if (a.shrinkToFit === '1' || a.shrinkToFit === 'true') notes.push({field: null, reason: '「縮小して全体を表示する」は移せない'});
   const code = styles.formats[xf.numFmtId] ?? 'General', mapped = mapFormat(code);
   st.numFmt = mapped.fmt;
-  const result = {st, notes, format: {code, ...mapped}};
+  const result = {st, notes, format: {code, ...mapped}, size: font.size};
   cache.set(index, result);
   return result;
 }
 
 // ---- Cells and sheets -------------------------------------------------------------------------------------------------
 
-function sharedStrings(parts, path) {
+function sharedStrings(parts, path, book) {
   if (!path || !parts.has(path)) return [];
-  return kids(parseXml(parts.get(path).toString('utf8')), 'si').map(stringItem);
+  return kids(parseXml(parts.get(path).toString('utf8')), 'si').map(si => stringItem(si, book));
 }
-// The text of <si>/<is>: its <t>, or the <t> of its runs; phonetic readings (<rPh>) are not part of the text.
-function stringItem(si) {
+// The text of a <t> as Excel reads it: without the spaces, tabs and line ends around it, unless xml:space="preserve".
+const tText = t => { const s = textOf(t); return t?.attrs['xml:space'] === 'preserve' ? s : s.replace(/^[ \t\n]+|[ \t\n]+$/g, ''); };
+/** The font a run's <rPr> gives its characters; what it leaves out (name, size, colour) is the cell's. */
+function runFont(rPr, book) {
+  const flag = name => { const e = kid(rPr, name); return !!e && e.attrs.val !== '0' && e.attrs.val !== 'false'; }, u = kid(rPr, 'u'), name = kid(rPr, 'rFont')?.attrs.val;
+  const font = {bold: flag('b'), italic: flag('i'), strike: flag('strike'), underline: !!u && u.attrs.val !== 'none'};
+  if (name) font.font = C.FONT_ALIAS[name] || name;
+  if (kid(rPr, 'sz')) font.size = +kid(rPr, 'sz').attrs.val;
+  if (kid(rPr, 'color')) font.color = colorOf(kid(rPr, 'color'), book, '#000000');
+  return font;
+}
+/**
+ * The text of <si>/<is>: its <t>, or the <t> of its runs; phonetic readings (<rPh>) are not part of the text. Runs that
+ * all have one format (one run is enough) show the text in it: font. Runs in different formats make it rich.
+ */
+function stringItem(si, book) {
   const runs = kids(si, 'r');
-  const text = runs.length ? runs.map(r => textOf(kid(r, 't'))).join('') : textOf(kid(si, 't'));
-  return {text: unescapeX(text), rich: runs.length > 1 && runs.some(r => kid(r, 'rPr'))};
+  const text = runs.length ? runs.map(r => tText(kid(r, 't'))).join('') : tText(kid(si, 't'));
+  const formats = runs.map(r => kid(r, 'rPr') ? JSON.stringify(runFont(kid(r, 'rPr'), book)) : null);
+  const uniform = formats.length > 0 && formats[0] !== null && formats.every(f => f === formats[0]);
+  return {text: unescapeX(text), rich: !uniform && formats.some(f => f !== null), ...(uniform ? {font: JSON.parse(formats[0])} : {})};
 }
 
 /** Whether the page computes this function: core.js answers #NAME? only for a function it does not know. */
@@ -343,10 +378,11 @@ function formulaSupport(f) {
   return {ok: true, maxRow, maxCol};
 }
 
-function cellValue(c, strings) {
+function cellValue(c, book) {
   const t = c.attrs.t || 'n', v = kid(c, 'v'), raw = v ? textOf(v) : null;
-  if (t === 's') { const s = strings[+raw]; return s ? {t: 's', v: s.text, rich: s.rich} : null; }
-  if (t === 'inlineStr') { const s = stringItem(kid(c, 'is') || {children: []}); return {t: 's', v: s.text, rich: s.rich}; }
+  const text = s => ({t: 's', v: s.text, rich: s.rich, ...(s.font ? {font: s.font} : {})});
+  if (t === 's') { const s = book.strings[+raw]; return s ? text(s) : null; }
+  if (t === 'inlineStr') return text(stringItem(kid(c, 'is') || {children: []}, book));
   if (raw === null) return null;
   if (t === 'str') return {t: 's', v: unescapeX(raw)};
   if (t === 'b') return {t: 'b', v: raw === '1' || raw === 'true'};
@@ -365,7 +401,7 @@ function readSheet(parts, book, info, index, report) {
   const name = info.name, notes = {cells: {}, sheet: []}, say = (key, text) => report.add(name, key, text);
   const noteCell = (a, fields, reason) => { (notes.cells[a] ||= []).push({fields, reason}); };
   const cells = new Map(); // addr -> {r, c, value, formula, xf}
-  const shared = new Map();
+  const shared = new Map(), inCell = [];
   let nextRow = 0;
   for (const row of kids(kid(xml, 'sheetData'), 'row')) {
     const r = row.attrs.r ? +row.attrs.r - 1 : nextRow;
@@ -384,29 +420,47 @@ function readSheet(parts, book, info, index, report) {
           else { const master = shared.get(f.attrs.si); if (master) formula = C.shiftFormula('=' + master.text, rr - master.r, cc - master.c).slice(1); }
         } else formula = textOf(f) || null;
       }
-      cells.set(C.addr(rr, cc), {r: rr, c: cc, value: cellValue(c, book.strings), formula, formulaKind, xf: +(c.attrs.s || 0)});
+      // A picture in a cell or a data type (a rich value, vm) is saved with an error value that Excel does not show.
+      const richValue = c.attrs.vm !== undefined;
+      if (richValue) inCell.push(C.addr(rr, cc));
+      cells.set(C.addr(rr, cc), {r: rr, c: cc, value: richValue ? null : cellValue(c, book), formula, formulaKind, ref: f?.attrs.ref, xf: +(c.attrs.s || 0)});
     }
   }
+  for (const a of inCell) noteCell(a, ['value2', 'text'], 'セルの中の画像やデータ型');
+  if (inCell.length) say('vm', `セルの中の画像やデータ型（${ranges(inCell)}）は移せない`);
   const rowInfo = new Map();
   for (const row of kids(kid(xml, 'sheetData'), 'row')) if (row.attrs.r) rowInfo.set(+row.attrs.r - 1, row.attrs);
+  const colDefs = kids(kid(xml, 'cols'), 'col'), colDef = c => colDefs.find(d => +d.attrs.min <= c + 1 && c + 1 <= +d.attrs.max);
+  // A cell without a <c> has its row's format when the row has one, else its column's (Excel's whole-row and
+  // whole-column formats), else the Normal style.
+  const rowXf = r => { const a = rowInfo.get(r); return a && (a.customFormat === '1' || a.customFormat === 'true') ? +(a.s || 0) : null; };
+  const colXf = c => { const d = colDef(c); return d && d.attrs.style !== undefined ? +d.attrs.style : null; };
+  const xfAt = (r, c) => cells.get(C.addr(r, c))?.xf ?? rowXf(r) ?? colXf(c) ?? 0;
   const merges = kids(kid(xml, 'mergeCells'), 'mergeCell').map(m => C.range(m.attrs.ref));
-  const links = new Map();
+  const links = new Map(), otherLinks = [];
   for (const h of kids(kid(xml, 'hyperlinks'), 'hyperlink')) {
     const q = C.range(h.attrs.ref), target = rels[h.attrs['r:id']]?.target, a = C.addr(q.r1, q.c1);
     if (target && /^https?:\/\//i.test(target)) links.set(a, target);
-    else { say('link', `${a} のリンク（${target || '#' + (h.attrs.location || '')}）は、http(s) のリンクでないので移せない`); noteCell(a, ['hyperlink', 'color', 'underline'], 'http(s) 以外のリンク'); }
+    else { otherLinks.push(`${a}（${target || '#' + (h.attrs.location || '')}）`); noteCell(a, ['hyperlink', 'color', 'underline'], 'http(s) 以外のリンク'); }
   }
+  if (otherLinks.length) say('link', `次のリンクは、http(s) のリンクでないので移せない: ${ranges(otherLinks)}`);
 
   // Formulas: kept when the page can compute them, otherwise the value Excel saved.
   let refRow = -1, refCol = -1;
-  const valueOnly = [];
+  const valueOnly = [], valueOnlyNote = a => noteCell(a, ['hasFormula', 'formula'], 'HTMLで計算できない数式は値にした');
   for (const [a, cell] of cells) {
+    // A data table (what-if analysis) has its <f>, without text, in its first cell only; Excel computes the whole range.
+    if (cell.formulaKind === 'dataTable') {
+      valueOnly.push(`${a}（データテーブル ${cell.ref || a}）`);
+      C.each(C.range(cell.ref || a), (r, c) => valueOnlyNote(C.addr(r, c)));
+      cell.formula = null;
+      continue;
+    }
     if (!cell.formula) continue;
-    const why = cell.formulaKind === 'array' ? '配列数式' : cell.formulaKind === 'dataTable' ? 'データテーブル' : null;
-    const support = why ? {ok: false, why} : formulaSupport('=' + cell.formula);
+    const support = cell.formulaKind === 'array' ? {ok: false, why: '配列数式'} : formulaSupport('=' + cell.formula);
     if (support.ok) { refRow = Math.max(refRow, support.maxRow); refCol = Math.max(refCol, support.maxCol); continue; }
     valueOnly.push(`${a}（=${cell.formula}：${support.why}）`);
-    noteCell(a, ['hasFormula', 'formula'], 'HTMLで計算できない数式は値にした');
+    valueOnlyNote(a);
     cell.formula = null;
   }
   if (valueOnly.length) say('formula', `次の数式は、HTMLで計算できないので、Excelが保存していた値にした: ${ranges(valueOnly)}`);
@@ -427,60 +481,100 @@ function readSheet(parts, book, info, index, report) {
   const cols = Math.min(LIMIT.cols, Math.max(10, lastCol + 4, styledCol + 1, refCol + 1));
   if (styledRow >= rows || styledCol >= cols) say('cut', `書式だけのセルのうち、HTMLの上限（500行・100列）の外にあるものは読み込まなかった`);
 
+  // The height of a row that fits the Normal font (for a font of unknown height, the file's default height).
+  const sheetFormat = kid(xml, 'sheetFormatPr')?.attrs || {};
+  const fitted = book.normalRow.pt ?? (+sheetFormat.defaultRowHeight || EXCEL_ROW_PT);
+
   // Cells. A merged cell takes its format from its top-left cell, and its outline from the cells on each edge.
   const out = {}, base = {...C.DEFAULT, ...book.defaultStyle};
   const mergeOf = (r, c) => merges.find(m => C.within(r, c, m));
-  const formatNotes = new Map();
-  for (const [a, cell] of cells) {
-    if (cell.r >= rows || cell.c >= cols) continue;
-    const merge = mergeOf(cell.r, cell.c);
-    if (merge && (cell.r !== merge.r1 || cell.c !== merge.c1)) {
-      if (cell.formula || cell.value && cell.value.v !== '') { say('hidden', `結合で隠れたセル ${a} の値は、Excelでも表示されないので読み込まなかった`); }
-      continue;
-    }
-    const {st: full, notes: styleNotes, format} = styleOf(book.styles, cell.xf);
-    const st = {...full};
+  const hiddenBy = (r, c) => { const m = mergeOf(r, c); return m && (r !== m.r1 || c !== m.c1); };
+  const edge = (r, c, key) => styleOf(book.styles, xfAt(r, c)).st[key];
+  const formatNotes = new Map(), hiddenValues = [];
+  // Per row, for the rows Excel fits to their text: the height of the tallest text, and whether it is approximate.
+  const rowFit = new Map(), roughRows = new Set();
+  const FONT_FIELDS = ['font', 'size', 'bold', 'italic', 'underline', 'strike', 'color'];
+  /** Puts the cell at (r, c), with the cell format xfIndex, into out; cell is its <c> as read (none for an empty cell). */
+  const put = (a, r, c, xfIndex, cell) => {
+    const {st: full, notes: styleNotes, format, size} = styleOf(book.styles, xfIndex);
+    const st = {...full}, merge = mergeOf(r, c);
     if (merge) {
-      const edge = (r, c, key) => (cells.get(C.addr(r, c)) ? styleOf(book.styles, cells.get(C.addr(r, c)).xf).st[key] : 'none');
       st.borderRight = edge(merge.r1, merge.c2, 'borderRight');
       st.borderBottom = edge(merge.r2, merge.c1, 'borderBottom');
     }
     for (const n of styleNotes) {
       if (n.field) noteCell(a, [n.field], n.reason);
+      // In Excel a border is also the neighbour's opposite side (the top of a cell is the bottom of the cell above).
+      const side = NEIGHBOUR_SIDE[n.field];
+      if (side && r + side[0] >= 0 && c + side[1] >= 0) noteCell(C.addr(r + side[0], c + side[1]), [side[2]], n.reason);
       say('style:' + n.reason, n.reason + '（' + a + ' など）');
     }
-    let value = cell.value;
+    let value = cell?.value;
+    const formula = cell?.formula;
     if (book.date1904 && value?.t === 'n' && st.numFmt === 'yyyy/mm/dd') value = {...value, v: value.v + 1462};
-    const isNumber = value?.t === 'n' || cell.formula;
-    if (!format.exact && (isNumber || format.code === '@')) {
+    // A format shows numbers, and only a format with an @ shows text, otherwise than written.
+    const shown = formula || value && !(value.t === 's' && value.v === '');
+    if (!format.exact && shown && (value?.t === 'n' || formula || format.code.includes('@'))) {
       noteCell(a, ['numfmt', 'text'], `表示形式「${format.code}」は「${format.fmt}」にした`);
       const key = format.code + '→' + format.fmt;
       formatNotes.set(key, [...(formatNotes.get(key) || []), a]);
+    } else if (shown && format.code !== (EXCEL_CODE[format.fmt] || format.fmt) && !(format.fmt === 'General' && format.exact)) {
+      noteCell(a, ['numfmt'], `表示形式「${format.code}」は、同じ表示の「${format.fmt}」にした`); // shown alike, written otherwise
     }
-    if (value?.rich) { noteCell(a, ['font', 'size', 'bold', 'italic', 'underline', 'strike', 'color'], '文字ごとの書式'); say('rich', `文字ごとに違う書式（一部だけ太字など）は、セル全体の書式にした（${a} など）`); }
+    if (value?.rich) { noteCell(a, FONT_FIELDS, '文字ごとの書式'); say('rich', `文字ごとに違う書式（一部だけ太字など）は、セル全体の書式にした（${a} など）`); }
+    // Runs in one format show the text in it; Excel then gives no single font for the cell (it reads as mixed).
+    let fontSize = size;
+    if (value?.font) {
+      const {size: runSize, ...rest} = value.font;
+      Object.assign(st, rest);
+      if (runSize !== undefined) { st.size = Math.min(96, Math.max(6, runSize)); fontSize = runSize; }
+      noteCell(a, FONT_FIELDS, '文字の書式（run）をセルの書式にした');
+    }
+    // A row without a height of its own fits its tallest text (merged cells over several rows do not count, as in Excel).
+    // Known fonts of 11pt give the height Excel gives; other sizes and fonts, approximated formats and wrapped text make
+    // the height approximate.
+    if (shown && !(merge && merge.r2 > merge.r1)) {
+      const known = ROW_PT_11[String(st.font).toLowerCase()];
+      const perPt = known !== undefined ? known / 11 : st.font === book.normalRow.font ? fitted / book.normalRow.size : EXCEL_ROW_PT / 11;
+      rowFit.set(r, Math.max(rowFit.get(r) ?? 0, perPt * fontSize));
+      if (known === undefined || fontSize !== 11 || styleNotes.length || value?.rich || st.wrap) roughRows.add(r);
+    }
     const entry = {};
-    if (cell.formula) { entry.t = 'f'; entry.f = '=' + cell.formula; }
+    if (formula) { entry.t = 'f'; entry.f = '=' + formula; }
     else if (!value || value.t === 's' && value.v === '') { entry.t = 's'; entry.v = ''; }
     else if (value.t === 'e') { entry.t = 's'; entry.v = value.v; noteCell(a, ['value2'], 'エラーの値は、その文字にした'); say('error', `エラーの値（#N/A など）は、その文字の文字列にした（${a} など）`); }
     else { entry.t = value.t; entry.v = value.v; }
     if (links.has(a)) entry.link = links.get(a);
     const diff = Object.fromEntries(Object.entries(st).filter(([k, v]) => base[k] !== v));
     if (Object.keys(diff).length) entry.s = diff;
-    if (entry.t === 's' && entry.v === '' && !entry.s && !entry.link) continue;
+    if (entry.t === 's' && entry.v === '' && !entry.s && !entry.link) return;
     out[a] = entry;
+  };
+  for (const [a, cell] of cells) {
+    if (cell.r >= rows || cell.c >= cols) continue;
+    if (hiddenBy(cell.r, cell.c)) { if (cell.formula || cell.value && cell.value.v !== '') hiddenValues.push(a); continue; }
+    put(a, cell.r, cell.c, cell.xf, cell);
   }
+  // Cells without a <c> in a formatted row or column take that format.
+  const rowXfs = Array.from({length: rows}, (_, r) => rowXf(r)), colXfs = Array.from({length: cols}, (_, c) => colXf(c));
+  if (rowXfs.some(x => x !== null) || colXfs.some(x => x !== null)) {
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const xfIndex = rowXfs[r] ?? colXfs[c], a = C.addr(r, c);
+      if (xfIndex !== null && !cells.has(a) && !hiddenBy(r, c)) put(a, r, c, xfIndex, null);
+    }
+  }
+  if (hiddenValues.length) say('hidden', `結合で隠れたセル（${ranges(hiddenValues)}）の値は、Excelでも表示されないので読み込まなかった`);
   for (const [key, list] of formatNotes) { const [code, fmt] = key.split('→'); say('format:' + key, `表示形式「${code}」はHTMLにないので「${fmt}」にした: ${ranges(list)}`); }
 
   // Sizes: px from Excel's column width (characters of the Normal font's widest digit) and row height (pt).
   // A column without a width of its own is Excel's default: baseColWidth digits and the padding, rounded up to a
   // multiple of 8 screen pixels (72px for Yu Gothic 11pt at 96dpi; 88 pixels at 120dpi, which is 70.4px there).
-  const sheetFormat = kid(xml, 'sheetFormatPr')?.attrs || {}, digit = book.digitPx;
+  const digit = book.digitPx;
   const defaultWidth = sheetFormat.defaultColWidth ? +sheetFormat.defaultColWidth * digit
     : Math.ceil(((+(sheetFormat.baseColWidth || 8)) * digit + 2 * Math.ceil(digit / 4) + 1) / 8) * 8;
   const colWidths = [], hiddenCols = [], clampCols = [], defaultCols = [];
-  const colDefs = kids(kid(xml, 'cols'), 'col');
   for (let c = 0; c < cols; c++) {
-    const def = colDefs.find(d => +d.attrs.min <= c + 1 && c + 1 <= +d.attrs.max);
+    const def = colDef(c);
     if (!def || def.attrs.width === undefined) defaultCols.push(colLetters(c));
     let px = def && def.attrs.width !== undefined ? +def.attrs.width * digit : defaultWidth;
     if (def && (def.attrs.hidden === '1' || def.attrs.hidden === 'true' || +def.attrs.width === 0)) { hiddenCols.push(colLetters(c)); px = defaultWidth; }
@@ -488,18 +582,30 @@ function readSheet(parts, book, info, index, report) {
     if (clamped !== Math.round(px) && !hiddenCols.includes(colLetters(c))) clampCols.push(colLetters(c));
     colWidths.push(clamped);
   }
-  const defaultHeight = +(sheetFormat.defaultRowHeight || 15) / 0.75;
-  const rowHeights = [], hiddenRows = [];
+  // A row without a height of its own (desktop Excel 16.0, measured): the sheet's default height when it is marked as set
+  // (customHeight); otherwise Excel fits the row to the Normal font, whatever height the file gives, and in a sheet
+  // without a default height an empty row is Excel's own height.
+  const setHeight = (sheetFormat.customHeight === '1' || sheetFormat.customHeight === 'true') && sheetFormat.defaultRowHeight ? +sheetFormat.defaultRowHeight : null;
+  const filled = new Set([...cells.values()].map(cell => cell.r));
+  const defaultPt = r => setHeight ?? (filled.has(r) || kid(xml, 'sheetFormatPr') ? fitted : EXCEL_ROW_PT);
+  if (setHeight === null && !book.normalRow.exact) notes.sheet.push({item: 'rowHeightAll', reason: '標準のフォントに合う行の高さは近い値'});
+  const rowHeights = [], hiddenRows = [], clampRows = [], fitRows = [];
   for (let r = 0; r < rows; r++) {
-    const attrs = rowInfo.get(r) || {};
-    let px = attrs.ht !== undefined ? +attrs.ht / 0.75 : defaultHeight;
-    if (attrs.hidden === '1' || attrs.hidden === 'true' || attrs.ht !== undefined && +attrs.ht === 0) { hiddenRows.push(r + 1); px = defaultHeight; }
-    rowHeights.push(Math.min(C.SIZE_LIMITS.rowHeight[1], Math.max(C.SIZE_LIMITS.rowHeight[0], Math.round(px))));
+    const attrs = rowInfo.get(r) || {}, hidden = attrs.hidden === '1' || attrs.hidden === 'true' || attrs.ht !== undefined && +attrs.ht === 0;
+    const fit = setHeight === null && attrs.ht === undefined && rowFit.has(r); // Excel fits the row to its text
+    let px = (attrs.ht !== undefined ? +attrs.ht : fit ? rowFit.get(r) : defaultPt(r)) / 0.75;
+    if (fit && roughRows.has(r) && !hidden) fitRows.push(r + 1);
+    if (hidden) { hiddenRows.push(r + 1); px = defaultPt(r) / 0.75; }
+    const height = Math.min(C.SIZE_LIMITS.rowHeight[1], Math.max(C.SIZE_LIMITS.rowHeight[0], Math.round(px)));
+    if (height !== Math.round(px) && !hidden) clampRows.push(r + 1);
+    rowHeights.push(height);
   }
   if (hiddenCols.length) { say('hiddenCols', `非表示の列（${hiddenCols.join('、')}）は、HTMLで隠せないので表示した`); notes.sheet.push({item: 'colWidth', cols: hiddenCols, reason: '非表示の列'}); }
   if (defaultCols.length) notes.sheet.push({item: 'colWidth', cols: defaultCols, reason: 'Excelの既定の列幅は、表示の倍率で少し変わる（96dpiで72px、120dpiで70.4px相当）'});
   if (clampCols.length) { say('clampCols', `列（${clampCols.join('、')}）の幅は、HTMLの範囲（24〜2044px）に収めた`); notes.sheet.push({item: 'colWidth', cols: clampCols, reason: '幅の範囲'}); }
   if (hiddenRows.length) { say('hiddenRows', `非表示の行（${ranges(hiddenRows.map(String))} 行目）は、HTMLで隠せないので表示した`); notes.sheet.push({item: 'rowHeight', rows: hiddenRows, reason: '非表示の行'}); }
+  if (clampRows.length) { say('clampRows', `行（${ranges(clampRows.map(String))} 行目）の高さは、HTMLの範囲（16〜546px）に収めた`); notes.sheet.push({item: 'rowHeight', rows: clampRows, reason: '高さの範囲'}); }
+  if (fitRows.length) notes.sheet.push({item: 'rowHeight', rows: fitRows, reason: 'Excelが中の文字に合わせて決める高さは、近い値'});
 
   // View: frozen panes, gridlines, zoom, selection.
   const view = kid(kid(xml, 'sheetViews'), 'sheetView'), pane = kid(view, 'pane'), out2 = {zoom: +(view?.attrs.zoomScale || 100)};
@@ -521,10 +627,14 @@ function readSheet(parts, book, info, index, report) {
     if (first) { const q = C.range(first); if (q.r2 < rows && q.c2 < cols) out2.selection = q; }
   }
   for (const [tag, label] of [['conditionalFormatting', '条件付き書式'], ['dataValidations', '入力規則'], ['autoFilter', 'フィルター'], ['tableParts', 'テーブル'],
-    ['sheetProtection', 'シートの保護'], ['legacyDrawing', 'コメント（メモ）'], ['rowBreaks', '改ページ'], ['colBreaks', '改ページ']]) {
+    ['sheetProtection', 'シートの保護'], ['legacyDrawing', 'コメント（メモ）'], ['rowBreaks', '改ページ'], ['colBreaks', '改ページ'], ['controls', 'フォームのコントロール']]) {
     if (kid(xml, tag)) say('drop:' + label, `${label}は移せない`);
   }
+  // What Excel 2010 and later keep in the sheet's extensions.
+  const EXT = {sparklineGroups: 'スパークライン', conditionalFormattings: '条件付き書式', dataValidations: '入力規則', slicerList: 'スライサー', timelineRefs: 'タイムライン'};
+  for (const ext of kids(kid(xml, 'extLst'), 'ext')) for (const el of kids(ext)) { const label = EXT[local(el.name)]; if (label) say('drop:' + label, `${label}は移せない`); }
   if (Object.values(rels).some(r => /comments|threadedComment/.test(r.type))) say('drop:コメント（メモ）', 'コメント（メモ）は移せない');
+  if (Object.values(rels).some(r => r.type === 'pivotTable')) say('drop:ピボットテーブル', 'ピボットテーブルは移せない（表示されていた値だけを移した）');
   if (info.hidden) say('hidden-sheet', 'Excelでは非表示のシートだが、HTMLでは表示した');
 
   const sheet = {id: 's' + (index + 1), name, rows, cols, colWidths, rowHeights, merges: merges.filter(m => m.r2 < rows && m.c2 < cols), cells: out};
@@ -540,26 +650,29 @@ function readPictures(parts, book, rels, xml, sheetName, report, notes) {
   const target = rels[drawing.attrs['r:id']]?.target;
   if (!target || !parts.has(target)) return out;
   const dxml = parseXml(parts.get(target).toString('utf8')), drels = relationships(parts, target);
-  let skipped = 0, other = 0;
-  for (const anchor of kids(dxml)) {
-    const kind = local(anchor.name);
+  const skipped = {format: 0, small: 0, large: 0};
+  let other = 0;
+  for (const item of kids(dxml)) {
+    // A drawing written for several versions of Office is wrapped in mc:AlternateContent; the first choice is the one shown.
+    const anchor = local(item.name) === 'AlternateContent' ? kids(kid(item, 'Choice') || kid(item, 'Fallback'))[0] : item;
+    const kind = anchor ? local(anchor.name) : '';
     if (!/Anchor$/.test(kind)) continue;
     const pic = kid(anchor, 'pic');
     if (!pic) { other++; continue; }
     const embed = kid(kid(pic, 'blipFill'), 'blip')?.attrs['r:embed'], media = drels[embed]?.target;
     const ext = (media || '').replace(/^.*\./, '').toLowerCase(), type = {png: 'png', jpg: 'jpeg', jpeg: 'jpeg', gif: 'gif', webp: 'webp'}[ext];
-    if (!media || !parts.has(media) || !type) { skipped++; continue; }
+    if (!media || !parts.has(media) || !type) { skipped.format++; continue; }
     const from = kid(anchor, 'from'), num = (el, n) => +textOf(kid(el, n)) || 0;
     const xfrm = kid(kid(pic, 'spPr'), 'xfrm'), size = kid(xfrm, 'ext') || kid(anchor, 'ext');
     let r = 0, c = 0, x = 0, y = 0;
     if (from) { c = num(from, 'col'); r = num(from, 'row'); x = num(from, 'colOff') / EMU_PER_PX; y = num(from, 'rowOff') / EMU_PER_PX; }
     else { const pos = kid(anchor, 'pos'); x = +(pos?.attrs.x || 0) / EMU_PER_PX; y = +(pos?.attrs.y || 0) / EMU_PER_PX; }
     const w = size ? +size.attrs.cx / EMU_PER_PX : 0, h = size ? +size.attrs.cy / EMU_PER_PX : 0;
-    if (!(w >= 4 && h >= 4)) { skipped++; continue; }
+    if (!(w >= 4 && h >= 4)) { skipped.small++; continue; }
     let asset = book.mediaAssets.get(media);
     if (!asset) {
       const data = 'data:image/' + type + ';base64,' + parts.get(media).toString('base64');
-      if (data.length > 15e6) { skipped++; continue; }
+      if (data.length > 15e6) { skipped.large++; continue; }
       asset = 'img-' + (book.mediaAssets.size + 1);
       book.mediaAssets.set(media, asset);
       book.assets[asset] = data;
@@ -568,7 +681,10 @@ function readPictures(parts, book, rels, xml, sheetName, report, notes) {
     if (xfrm?.attrs.rot && +xfrm.attrs.rot) report.add(sheetName, 'rotate', '画像の回転は移せない');
     out.push({id: 'pic-' + (out.length + 1), asset, r, c, x: Math.round(Math.min(20000, x)), y: Math.round(Math.min(20000, y)), w: Math.round(Math.min(10000, w)), h: Math.round(Math.min(10000, h))});
   }
-  if (skipped) { report.add(sheetName, 'pictures', `画像 ${skipped} 個は、HTMLで扱えない形式（EMF・BMPなど）なので移せなかった`); notes.sheet.push({item: 'pictures', reason: '移せない画像'}); }
+  const lost = {format: n => `画像 ${n} 個は、HTMLで扱えない形式（EMF・BMPなど）なので移せなかった`, small: n => `幅か高さが4px未満の画像 ${n} 個は移せなかった`,
+    large: n => `HTMLに入れられる大きさ（15MB）を超える画像 ${n} 個は移せなかった`};
+  for (const [kind, n] of Object.entries(skipped)) if (n) report.add(sheetName, 'pictures-' + kind, lost[kind](n));
+  if (skipped.format + skipped.small + skipped.large) notes.sheet.push({item: 'pictures', reason: '移せない画像'});
   if (other) { report.add(sheetName, 'shapes', `図形・グラフなど ${other} 個は移せない`); }
   return out;
 }
@@ -591,7 +707,7 @@ function fromXlsx(buffer, {name = 'book.xlsx'} = {}) {
   const themePath = byType('theme');
   if (themePath && parts.has(themePath)) {
     const scheme = kid(kid(parseXml(parts.get(themePath).toString('utf8')), 'themeElements'), 'clrScheme');
-    const get = n => { const el = kids(kid(scheme, n))[0]; return el ? (local(el.name) === 'sysClr' ? el.attrs.lastClr : el.attrs.val) : null; };
+    const get = n => { const el = kids(kid(scheme, n))[0]; return el ? (local(el.name) === 'sysClr' ? SYSTEM_COLOR[el.attrs.val] || el.attrs.lastClr : el.attrs.val) : null; };
     const colors = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink'].map(get);
     book.theme = colors.map((c, i) => c && /^[0-9A-Fa-f]{6}$/.test(c) ? c.toUpperCase() : OFFICE_THEME[i]);
   }
@@ -600,29 +716,36 @@ function fromXlsx(buffer, {name = 'book.xlsx'} = {}) {
   const indexed = kids(kid(kid(stylesXml, 'colors'), 'indexedColors'), 'rgbColor').map(c => (c.attrs.rgb || '').slice(-6).toUpperCase());
   if (indexed.length) book.palette = indexed;
   book.styles = readStyles(stylesXml, book);
-  book.strings = sharedStrings(parts, byType('sharedStrings'));
+  book.strings = sharedStrings(parts, byType('sharedStrings'), book);
   const normal = book.styles.normal.font;
   const digit11 = DIGIT_PX_11[String(normal.name).toLowerCase()];
   book.digitPx = Math.max(5, Math.round((digit11 ?? 8) * normal.size / 11));
+  const row11 = ROW_PT_11[String(normal.name).toLowerCase()];
+  book.normalRow = {pt: row11 === undefined ? null : row11 * normal.size / 11, exact: row11 !== undefined && normal.size === 11, font: normal.name, size: normal.size};
   book.defaultStyle = {font: normal.name, size: normal.size, valign: VERTICAL[book.styles.normal.vertical] || 'bottom'};
 
-  const sheetInfos = kids(kid(wbXml, 'sheets'), 'sheet').map(s => ({name: s.attrs.name, path: rels[s.attrs['r:id']]?.target, hidden: /hidden/i.test(s.attrs.state || '')}))
-    .filter(s => s.path && parts.has(s.path));
+  // Only worksheets hold cells: chart sheets, dialog sheets and macro sheets are left out, and reported.
   const report = new Report();
+  const allSheets = kids(kid(wbXml, 'sheets'), 'sheet').map((s, position) => ({position, name: s.attrs.name, rel: rels[s.attrs['r:id']], hidden: /hidden/i.test(s.attrs.state || '')}));
+  const OTHER_SHEET = {chartsheet: 'グラフのシート', dialogsheet: 'ダイアログのシート', xlMacrosheet: 'マクロのシート', xlIntlMacrosheet: 'マクロのシート'};
+  for (const s of allSheets) if (s.rel && s.rel.type !== 'worksheet') report.add(s.name, 'not-worksheet', `${OTHER_SHEET[s.rel.type] || 'ワークシートでないシート'}なので移せない`);
+  const sheetInfos = allSheets.filter(s => s.rel?.type === 'worksheet' && parts.has(s.rel.target)).map(s => ({...s, path: s.rel.target}));
   if (!sheetInfos.length) throw Error('xlsx にワークシートがありません（グラフだけのシートは移せません）。');
   if (sheetInfos.length > LIMIT.sheets) throw Error(`シートが ${sheetInfos.length} 枚あり、HTMLの上限（30枚）を超えるので読み込めません。必要なシートを伝えてください。`);
   const results = sheetInfos.map((info, i) => readSheet(parts, book, info, i, report));
   const tooLarge = results.filter(r => r.tooLarge).map(r => r.tooLarge);
   if (tooLarge.length) throw Error('HTMLの上限（1シート500行・100列）を超えるので読み込めません: ' +
     tooLarge.map(t => `シート「${t.name}」は ${t.rows} 行・${t.cols} 列`).join('、') + '。読み込む範囲を指定し直してください。');
-  const activeTab = Math.min(results.length - 1, +(kid(kid(wbXml, 'bookViews'), 'workbookView')?.attrs.activeTab || 0));
-  const active = results[activeTab];
+  // The sheet that was open: its position counts every sheet; one that was left out gives the next worksheet (or the last).
+  const tab = +(kid(kid(wbXml, 'bookViews'), 'workbookView')?.attrs.activeTab || 0), next = sheetInfos.findIndex(s => s.position >= tab);
+  const active = results[next < 0 ? results.length - 1 : next];
   const zoom = Math.round(active.view.zoom || 100), clampedZoom = Math.min(200, Math.max(50, zoom));
   if (clampedZoom !== zoom) report.add(active.sheet.name, 'zoom', `倍率 ${zoom}% は ${clampedZoom}% にした（HTMLは50〜200%）`);
   // The page has one zoom for the whole book: the zoom of the sheet that was open.
   for (const r of results) {
     const own = Math.round(r.view.zoom || 100);
     if (own === clampedZoom) continue;
+    if (r === active) { r.notes.sheet.push({item: 'zoom', reason: 'HTMLの倍率は50〜200%'}); continue; } // reported above
     report.add(r.sheet.name, 'zoom-sheet', `倍率（${own}%）は、ブック全体の倍率（${clampedZoom}%）にした`);
     r.notes.sheet.push({item: 'zoom', reason: 'HTMLの倍率はブック全体で1つ'});
   }
@@ -643,7 +766,7 @@ function fromXlsx(buffer, {name = 'book.xlsx'} = {}) {
     for (const row of kids(kid(xml, 'sheetData'), 'row')) for (const c of kids(row, 'c')) {
       const a = c.attrs.r, cell = a && sheet.cells[a];
       if (!cell || cell.t !== 'f') continue;
-      const saved = cellValue(c, book.strings);
+      const saved = cellValue(c, book);
       if (!saved) continue;
       const [r, col] = C.coord(a), got = C.calculate(workbook, sheet, r, col, new Set(), cache);
       const same = saved.t === 'n' ? typeof got === 'number' && Math.abs(got - saved.v) <= 1e-9 * Math.max(1, Math.abs(saved.v)) : saved.t === 'e' ? got === saved.v : got === saved.v;

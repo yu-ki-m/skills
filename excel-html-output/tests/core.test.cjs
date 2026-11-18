@@ -77,3 +77,43 @@ test('copying a range that holds only part of a merged cell takes just that rang
   const left=C.rangeData(w,s,C.range('A1:A2'));assert.deepEqual([left.cells.A1.v,left.merges],['題名',[]],'a merged cell whose top-left is in the range gives its value, unmerged');
   assert.deepEqual(C.rangeData(w,s,C.range('A10:C12')).merges,[{r1:1,c1:0,r2:2,c2:2}],'a merged cell wholly inside the range stays merged');});
 test('formula syntax can be checked without evaluating it (an xlsx must not hold a formula Excel cannot read)',()=>{for(const f of ['=SUM(A1:A3)*2','=vlookup(A1,B1:C3,2,FALSE)','=IF(A1>0,"正",-A1)','=A1%&"円"','=--A1','=TRUE'])assert.doesNotThrow(()=>C.evalFormula(f,null,true),f);for(const f of ['=SUM(A1:A3','=1+','=A1 B1','="abc','=Sheet2!A1','=(1','=1)','='])assert.throws(()=>C.evalFormula(f,null,true),f);});
+// The lists of what a book can hold (FIELDS, CHOICES, CELL_TYPES, FUNCTIONS) are the ones validate and the formulas use,
+// so a new feature has to be added to them, and tests/xlsx-features.test.mjs then asks for its xlsx samples.
+const pictureBook=()=>{const w=make(),s=w.sheets[0];w.assets={a:'data:image/png;base64,iVBORw0KGgo='};w.view={zoom:100,selection:{r1:0,c1:0,r2:0,c2:0}};
+  Object.assign(s,{freeze:{rows:1,cols:0},merges:[{r1:2,c1:0,r2:2,c2:1}],cells:{A1:{t:'s',v:'x'}},images:[{id:'p',asset:'a',r:3,c:0,x:0,y:0,w:10,h:10}]});return w;};
+const escape=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+test('validate refuses fields the book does not have, at every level, and says where',()=>{
+  const places=[[w=>w,'extra'],[w=>w.view,'view.extra'],[w=>w.view.selection,'view.selection.extra'],[w=>w.sheets[0],'sheets[0].extra'],[w=>w.sheets[0].freeze,'sheets[0].freeze.extra'],
+    [w=>w.sheets[0].merges[0],'sheets[0].merges[0].extra'],[w=>w.sheets[0].cells.A1,'sheets[0].cells.A1.extra'],[w=>w.sheets[0].images[0],'sheets[0].images[0].extra']];
+  for(const [at,place] of places){const w=pictureBook();C.validate(w);at(w).extra=1;assert.throws(()=>C.validate(w),new RegExp('未対応の項目 '+escape(place)+'$'),place);}});
+test('validate accepts a book that uses every listed field',()=>{const w=pictureBook(),s=w.sheets[0];
+  Object.assign(w,{defaultStyle:{size:10},view:{zoom:110,active:[1,1],selection:{r1:1,c1:1,r2:2,c2:2},scrollTop:0,scrollLeft:0}});
+  Object.assign(s,{gridlines:false,defaultStyle:{fill:'#fff2cc'},cells:{A1:{t:'s',v:'x',s:{bold:true},link:'https://example.com/'},A2:{t:'n',v:1},A3:{t:'b',v:true},B1:{t:'f',f:'=A2'}}});
+  const used={book:w,sheet:s,cell:{...s.cells.A1,...s.cells.B1},view:w.view,freeze:s.freeze,range:s.merges[0],image:s.images[0]};
+  assert.deepEqual(Object.keys(C.FIELDS).sort(),Object.keys(used).sort());
+  for(const [kind,list] of Object.entries(C.FIELDS))assert.deepEqual(Object.keys(used[kind]).sort(),[...list].sort(),kind+': the book uses every field');
+  assert.doesNotThrow(()=>C.validate(w));
+  without(C.FIELDS.sheet,'gridlines',()=>assert.throws(()=>C.validate(w),/未対応の項目 sheets\[0\]\.gridlines$/,'a field taken out of FIELDS'));});
+test('gridlines is true or false',()=>{const w=make();for(const v of [true,false]){w.sheets[0].gridlines=v;assert.doesNotThrow(()=>C.validate(w),String(v));}
+  for(const v of ['no',0,null]){w.sheets[0].gridlines=v;assert.throws(()=>C.validate(w),/gridlines/,String(v));}});
+// Takes value out of list while fn runs, to show that core.js reads the exported list itself.
+const without=(list,value,fn)=>{const i=list.indexOf(value);assert.ok(i>=0,value);list.splice(i,1);try{fn();}finally{list.splice(i,0,value);}};
+const result=f=>{try{return C.evalFormula(f,()=>0);}catch(e){return e.message;}};
+test('the formulas compute the functions in FUNCTIONS, and no other',()=>{
+  for(const name of C.FUNCTIONS)assert.notEqual(result('='+name+'()'),'#NAME?',name+' is computed (the question read_xlsx.cjs asks)');
+  without(C.FUNCTIONS,'SUM',()=>assert.equal(result('=SUM(1,2)'),'#NAME?','a function taken out of FUNCTIONS'));
+  without(C.FUNCTIONS,'IF',()=>assert.equal(result('=IF(TRUE,1,2)'),'#NAME?','IF too, though its arguments are computed lazily'));
+  assert.equal(result('=VLOOKUP(1,A1:B2,2)'),'#NAME?','a function the page does not compute');
+  assert.equal(result('=VLOOKUP(1/0,A1:B2,2)'),'#DIV/0!','an error in an argument still comes first, as Excel shows it for VLOOKUP (desktop Excel 16.0)');});
+test('a name Excel does not know is #NAME? even when an argument is an error',{todo:'the page does not know which names Excel knows: =FOO(1/0) shows #DIV/0!, while desktop Excel 16.0 shows #NAME?'},()=>{
+  assert.equal(result('=FOO(1/0)'),'#NAME?');});
+test('a number aligned general with an indent is shown aligned left, as Excel aligns a general cell it indents',{todo:'the screen (css) aligns the number right and indents it from the right, while the clipboard (xlCss) and the xlsx write it aligned left; only a book JSON holds this, since the ribbon has no indent button'},()=>{
+  assert.match(C.css({...C.DEFAULT,indent:2},5),/text-align:left/);});
+test('validate takes only the values in CHOICES and CELL_TYPES',()=>{const w=make(),s=w.sheets[0];
+  for(const align of C.CHOICES.align){s.cells.A1={t:'s',v:'x',s:{align}};assert.doesNotThrow(()=>C.validate(w),align);}
+  for(const valign of C.CHOICES.valign){s.cells.A1={t:'s',v:'x',s:{valign}};assert.doesNotThrow(()=>C.validate(w),valign);}
+  s.cells.A1={t:'s',v:'x',s:{align:'justify'}};assert.throws(()=>C.validate(w),/align/);s.cells.A1={t:'s',v:'x',s:{valign:'center'}};assert.throws(()=>C.validate(w),/valign/);
+  s.cells.A1={t:'s',v:'x',s:{align:'center'}};without(C.CHOICES.align,'center',()=>assert.throws(()=>C.validate(w),/align/,'a value taken out of CHOICES'));
+  for(const t of C.CELL_TYPES){s.cells.A1=t==='f'?{t,f:'=1'}:{t,v:t==='s'?'x':t==='n'?1:true};assert.doesNotThrow(()=>C.validate(w),t);}
+  s.cells.A1={t:'b',v:true};without(C.CELL_TYPES,'b',()=>assert.throws(()=>C.validate(w),/型 A1/,'a type taken out of CELL_TYPES'));
+  s.cells.A1={t:'e',v:'#N/A'};assert.throws(()=>C.validate(w),/型 A1/);});

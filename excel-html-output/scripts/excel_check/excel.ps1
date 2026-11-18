@@ -15,17 +15,20 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\clip.ps1"
 $enc = New-Object System.Text.UTF8Encoding($false)
 
+# A colour Excel does not give as one number (a gradient fill, a text in several colours) is $null.
+function Num($v) { if ($null -eq $v -or $v -is [DBNull]) { $null } else { [int]$v } }
+
 function Dump-Range($xl, $ws) {
   $cells = @()
   for ($r = $R1; $r -le $R2; $r++) { for ($c = $C1; $c -le $C2; $c++) {
     $x = $ws.Cells.Item($r, $c); $b = $x.Borders
-    $bd = { param($i) $e = $b.Item($i); if ($e.LineStyle -eq -4142) { 'none' } else { "$($e.LineStyle)/$($e.Weight)/$([int]$e.Color)" } }
+    $bd = { param($i) $e = $b.Item($i); if ($e.LineStyle -eq -4142) { 'none' } else { "$($e.LineStyle)/$($e.Weight)/$(Num $e.Color)" } }
     $cells += [ordered]@{
       addr = $x.Address(0,0); text = $x.Text; value2 = $x.Value2; hasFormula = $x.HasFormula; formula = $x.Formula
       prefix = $x.PrefixCharacter; numfmt = $x.NumberFormat
       font = $x.Font.Name; size = $x.Font.Size; bold = $x.Font.Bold; italic = $x.Font.Italic
-      underline = $x.Font.Underline; strike = $x.Font.Strikethrough; color = [int]$x.Font.Color
-      fill = if ($x.Interior.Pattern -eq -4142) { 'none' } else { [int]$x.Interior.Color }
+      underline = $x.Font.Underline; strike = $x.Font.Strikethrough; color = Num $x.Font.Color
+      fill = if ($x.Interior.Pattern -eq -4142) { 'none' } else { Num $x.Interior.Color }
       halign = $x.HorizontalAlignment; valign = $x.VerticalAlignment; wrap = $x.WrapText; indent = $x.IndentLevel
       mergeArea = if ($x.MergeCells) { $x.MergeArea.Address(0,0) } else { '' }
       hyperlink = if ($x.Hyperlinks.Count) { $x.Hyperlinks.Item(1).Address } else { '' }
@@ -127,7 +130,9 @@ function Open-Xlsx($xl) {
     ForEach-Object { Get-Content -Raw -Encoding utf8 $_.FullName })
   $active = $wb.ActiveSheet.Name
   $names = @(foreach ($s in $wb.Worksheets) { $s.Name })
-  $ws = $wb.Worksheets.Item($SheetName); $ws.Activate(); $win = $wb.Windows.Item(1)
+  # A hidden sheet cannot be activated, and its view would be read from the sheet that is: it is shown first (in this
+  # read-only copy, which is never saved).
+  $ws = $wb.Worksheets.Item($SheetName); if ($ws.Visible -ne -1) { $ws.Visible = -1 }; $ws.Activate(); $win = $wb.Windows.Item(1)
   # Pictures only (msoPicture 13): a comment, a chart or a drawn shape is a shape too.
   $pictures = @(foreach ($sh in $ws.Shapes) { if ($sh.Type -eq 13) { [ordered]@{ name = $sh.Name; type = $sh.Type; topLeft = $sh.TopLeftCell.Address(0, 0)
     left = $sh.Left; top = $sh.Top; width = $sh.Width; height = $sh.Height; placement = $sh.Placement } } })

@@ -38,7 +38,8 @@ test('Excelの列幅・行の高さ・枠の固定・枠線・倍率・選択・
   // 列幅は「標準のフォントの数字1文字の幅」の単位。游ゴシック11ptは8px（96dpi）なので、xlsxの幅×8。
   // 幅を指定していない列は、Excelの既定の幅（数字8文字分と余白を、8pxの倍数に切り上げた72px）。
   assert.deepEqual(s.colWidths.slice(0, 9), [74, 150, 62, 86, 102, 102, 94, 72, 72], 'H列は非表示なので、既定の幅で表示する');
-  assert.deepEqual([s.rowHeights[0], s.rowHeights[1], s.rowHeights[4], s.rowHeights[11]], [40, 24, 48, 42], '行の高さはpt÷0.75。指定のない行はシートの既定（18pt）');
+  assert.deepEqual([s.rowHeights[0], s.rowHeights[1], s.rowHeights[4], s.rowHeights[11]], [40, 25, 48, 42],
+    '行の高さはpt÷0.75。指定のない行は、Excelと同じく標準のフォント（游ゴシック11pt）に合う18.75pt（ファイルの18ptは、表示の倍率125%で保存した値）');
   assert.deepEqual(s.freeze, {rows: 3, cols: 0});
   assert.equal(w.sheets[1].gridlines, false);
   assert.equal(w.activeSheet, 's1');
@@ -86,11 +87,22 @@ test('HTMLにない表示形式・罫線・網かけや、移せない回転・�
   assert.ok(result.notes['単価表'].sheet.some(n => n.item === 'zoom'));
 });
 
-test('テーマの色の明るさの調整は、Excelと同じ色にする（Excelが表示した132組のうちの例）', () => {
-  const pairs = [['4472C4', 0.7999816888943144, 'D9E1F2'], ['4472C4', -0.249977111117893, '305496'], ['4472C4', -0.499984740745262, '203764'],
-    ['E7E6E6', 0.5999938962981048, 'F4F4F4'], ['E7E6E6', -0.249977111117893, 'AEAAAA'], ['000000', 0.7999816888943144, 'CCCCCC'],
-    ['FFFFFF', -0.1499984740745262, 'D9D9D9'], ['FFFFFF', -0.499984740745262, '808080'], ['000000', 0.0499893185216834, '0D0D0D']];
-  for (const [base, t, want] of pairs) assert.equal(tint(base, t), want, `${base} ${t}`);
+test('テーマの色の明るさの調整は、Excelと同じ色にする（Excelが表示したテーマの12色×11段階の132組すべて）', () => {
+  // Office 2013-2022 のテーマの色（lt1, dk1, lt2, dk2, アクセント1〜6, リンク, 表示済みのリンク）と、色の選択肢の11段階の明るさ。
+  // 色は、その組み合わせで塗ったセルを、デスクトップ版Excel 16.0 で開いて読み取ったもの。
+  const theme = ['FFFFFF', '000000', 'E7E6E6', '44546A', '4472C4', 'ED7D31', 'A5A5A5', 'FFC000', '5B9BD5', '70AD47', '0563C1', '954F72'];
+  const tints = [0.7999816888943144, 0.5999938962981048, 0.3999755851924192, 0.249977111117893, 0.1499984740745262, 0.0499893185216834,
+    -0.0499893185216834, -0.1499984740745262, -0.249977111117893, -0.3499862666707358, -0.499984740745262];
+  const shown = [
+    'ffffff ffffff ffffff ffffff ffffff ffffff f2f2f2 d9d9d9 bfbfbf a6a6a6 808080', 'cccccc 999999 666666 404040 262626 0d0d0d 000000 000000 000000 000000 000000',
+    'fafafa f4f4f4 f0f0f0 ececec eaeaea e8e8e8 dcdada c5c2c2 aeaaaa 989494 757171', 'd6dce4 acb9ca 8497b0 657c9c 576c88 4a5b73 404f64 394759 333f4f 2d3644 222b35',
+    'd9e1f2 b4c6e7 8ea9db 7395d2 5f85cd 4b77c7 3c69bd 355faa 305496 284782 203764', 'fce4d6 f8cbad f4b084 f19d65 ef8f50 ee833c ec7424 de6514 c65911 aa4d0f 833c0c',
+    'ededed dbdbdb c9c9c9 bbbbbb b1b1b1 a9a9a9 9c9c9c 8b8b8b 7b7b7b 6a6a6a 525252', 'fff2cc ffe699 ffd966 ffcf40 ffc926 ffc20d f2b600 d9a300 bf8f00 a67c00 806000',
+    'ddebf7 bdd7ee 9bc2e6 84b4df 73a9db 629fd7 4e93d1 3685cb 2f75b5 28659b 1f4e78', 'e2efda c6e0b4 a9d08e 93c572 84bd5e 76b64b 6aa444 5f923d 548235 48702e 375623',
+    'c1dffd 85c0fc 46a0fb 1a89f9 067aee 056acf 045eb7 0454a4 03498f 03407c 023160', 'ebdae2 d8b4c6 c58faa b67495 ab6186 9d5378 8c4a6b 7d4260 703a55 603349 492738'];
+  const wrong = [];
+  theme.forEach((base, i) => shown[i].split(' ').forEach((want, j) => { if (tint(base, tints[j]) !== want.toUpperCase()) wrong.push(`${base} ${tints[j]}: ${tint(base, tints[j])}（Excel ${want}）`); }));
+  assert.deepEqual(wrong, []);
 });
 
 test('このスキルで書き出したxlsxを読み込むと、元の表に戻る', () => {

@@ -2,17 +2,21 @@
 // 書き方は、同じ表をデスクトップ版Excel（16.0、ビルド20326）の中で作って保存したxlsxに合わせてある。
 // ここでは、書き出したファイルを tests/lib/xlsx.mjs で読み、セル・書式・寸法・表示・リンク・画像を確かめる。
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {blankBook, SKILL_ROOT} from './lib/workbook.mjs';
-import {readXlsx} from './lib/xlsx.mjs';
+import {kid, readXlsx} from './lib/xlsx.mjs';
 
 const {toXlsx} = createRequire(import.meta.url)(join(SKILL_ROOT, 'scripts', 'xlsx.cjs'));
 const read = book => readXlsx(toXlsx(book).bytes);
 const sheetOf = book => read(book).sheets[0];
 const valueOf = (sheet, a) => ({type: sheet.cells[a]?.type, value: sheet.cells[a]?.value});
 const png = Buffer.from('png の中身のかわり');
+// The fonts the page's ribbon offers (assets/shell.html).
+const ribbonFonts = [...readFileSync(join(SKILL_ROOT, 'assets', 'shell.html'), 'utf8').match(/<select id="font"[^>]*>(.*?)<\/select>/s)[1]
+  .matchAll(/<option>([^<]+)<\/option>/g)].map(m => m[1]);
 
 test('セルの値を、Excelと同じ型で書く（文字列・数値・真偽値・書式だけの空のセル）', () => {
   const x = read(blankBook({sheet: {cells: {
@@ -36,6 +40,12 @@ test('セルの値を、Excelと同じ型で書く（文字列・数値・真偽
   assert.equal(x.strings.filter(t => t === '見出し').length, 1, '同じ文字列は共有文字列の表に1回だけ入る');
 });
 
+test('-0・とても大きい数・とても小さい数もその値で書き、値か書式のあるセルの範囲を dimension に書く', () => {
+  const s = sheetOf(blankBook({sheet: {cells: {B2: {t: 'n', v: -0}, C3: {t: 'n', v: 1e21}, D4: {t: 'n', v: 1.5e-7}, A5: {t: 's', v: '', s: {fill: '#ff0000'}}}}}));
+  assert.deepEqual([valueOf(s, 'B2'), valueOf(s, 'C3'), valueOf(s, 'D4')], [{type: 'n', value: 0}, {type: 'n', value: 1e21}, {type: 'n', value: 1.5e-7}]);
+  assert.equal(s.dimension, 'A2:D5');
+});
+
 test('数式は数式のまま書き、HTMLが計算した値も一緒に入れて、Excelが開くときに計算し直すようにする', () => {
   const x = read(blankBook({sheet: {cells: {
     A1: {t: 'n', v: 2}, A2: {t: 'n', v: 3},
@@ -55,6 +65,14 @@ test('数式は数式のまま書き、HTMLが計算した値も一緒に入れ�
   assert.equal(s.cells.B9.formula, 'VLOOKUP(A1,A1:A2,1,FALSE)', 'HTMLで計算できない関数も、Excelでは計算できるので数式のまま書く');
   assert.equal(s.cells.B9.style.numFmt, '#,##0');
   assert.equal(x.calc.fullCalcOnLoad, '1', 'Excelが開くときに全部の数式を計算し直す');
+});
+
+test('数式の中の文字列（"" を含む）は大文字にせず、計算結果が空の文字列の数式も書ける', () => {
+  const s = sheetOf(blankBook({sheet: {cells: {A1: {t: 'n', v: 1}, B1: {t: 'f', f: '=if(a1=1,"say ""hi"" to a1","no")'}, B2: {t: 'f', f: '=IF(A1=1,"","x")'},
+    B3: {t: 'f', f: '=A1<2'}}}}));
+  assert.deepEqual({formula: s.cells.B1.formula, ...valueOf(s, 'B1')}, {formula: 'IF(A1=1,"say ""hi"" to a1","no")', type: 'str', value: 'say "hi" to a1'});
+  assert.deepEqual({formula: s.cells.B2.formula, ...valueOf(s, 'B2')}, {formula: 'IF(A1=1,"","x")', type: 'str', value: ''});
+  assert.deepEqual({formula: s.cells.B3.formula, ...valueOf(s, 'B3')}, {formula: 'A1<2', type: 'b', value: true});
 });
 
 test('HTMLの数式として読めない式は、Excelで壊れたファイルにしないよう、その文字のまま文字列で書き、そのことを知らせる', () => {
@@ -94,8 +112,9 @@ test('フォント・文字色・塗り・配置・折り返し・インデン�
     A1: {t: 's', v: 'a', s: {bold: true, italic: true, underline: true, strike: true, color: '#c00000', size: 14, font: 'Meiryo'}},
     A2: {t: 's', v: 'b', s: {fill: '#e2efda', align: 'center', valign: 'top', wrap: true}},
     A3: {t: 'n', v: 1, s: {indent: 2}}, A4: {t: 's', v: 'c', s: {align: 'right', indent: 1, valign: 'bottom'}},
-    A5: {t: 's', v: 'd', s: {font: 'Arial'}}, A6: {t: 's', v: 'e'},
+    A5: {t: 's', v: 'd', s: {font: 'Arial'}}, A6: {t: 's', v: 'e'}, A7: {t: 's', v: 'f', s: {valign: 'bottom'}},
   }}}));
+  assert.deepEqual(s.cells.A7.style.alignment, {horizontal: 'general', vertical: 'bottom', wrapText: false, indent: 0}, '下揃えだけのセルは、配置を書かない（Excelの既定が下揃え）');
   const font = a => { const {name, size, bold, italic, strike, underline, color} = s.cells[a].style.font; return {name, size, bold, italic, strike, underline, color}; };
   assert.deepEqual(font('A1'), {name: 'メイリオ', size: 14, bold: true, italic: true, strike: true, underline: 'single', color: '#c00000'}, '日本語版Excelと同じく、フォント名は日本語の名前で書く');
   assert.equal(s.cells.A1.style.font.charset, 128, '日本語のフォントは、文字セットを日本語にする');
@@ -107,6 +126,34 @@ test('フォント・文字色・塗り・配置・折り返し・インデン�
   assert.notEqual(s.cells.A5.style.font.charset, 128);
   assert.deepEqual(font('A6'), {name: '游ゴシック', size: 10, bold: false, italic: false, strike: false, underline: 'none', color: '#000000'});
   assert.deepEqual({fill: s.cells.A6.style.fill, vertical: s.cells.A6.style.alignment.vertical}, {fill: 'none', vertical: 'center'}, '日本語版Excelの既定と同じく上下中央');
+});
+
+test('リボンの一覧のフォントと、日本語の名前があるフォントを、日本語版Excelと同じ名前と文字セットで書く', () => {
+  // 日本語版Excelは、日本語の名前があるフォントをその名前で書き、日本語のフォントの文字セットを日本語（128）にする。
+  const want = {'Yu Gothic': ['游ゴシック', 128], 'Yu Gothic UI': ['Yu Gothic UI', 128], 'Meiryo': ['メイリオ', 128], 'MS PGothic': ['ＭＳ Ｐゴシック', 128],
+    'Aptos': ['Aptos', undefined], 'Calibri': ['Calibri', undefined], 'Arial': ['Arial', undefined],
+    'Yu Mincho': ['游明朝', 128], 'MS Gothic': ['ＭＳ ゴシック', 128], 'MS Mincho': ['ＭＳ 明朝', 128], 'MS PMincho': ['ＭＳ Ｐ明朝', 128]};
+  assert.ok(ribbonFonts.length >= 7, 'リボンのフォントの一覧を読めている');
+  for (const font of ribbonFonts) assert.ok(font in want, `リボンのフォント ${font} の期待する名前がない`);
+  const names = Object.keys(want), cells = Object.fromEntries(names.map((font, i) => ['A' + (i + 1), {t: 's', v: font, s: {font, bold: true}}]));
+  const s = sheetOf(blankBook({sheet: {cells}}));
+  names.forEach((font, i) => { const f = s.cells['A' + (i + 1)].style.font; assert.deepEqual([f.name, f.charset], want[font], font); });
+});
+
+test('ブックとシートの既定の書式は、HTMLと同じく、値のない空のセルにも付ける（塗り・罫線・フォント）', () => {
+  // HTMLは、値のないセルも既定の書式（defaultStyle）で表示し、そこに入力した値もその書式になる。
+  const book = blankBook({defaultStyle: {fill: '#fff2cc', borderBottom: '1px solid #000000'}, sheet: {rows: 3, cols: 2, cells: {A1: {t: 's', v: '値'}}}});
+  const base = book.sheets[0];
+  book.sheets = [base, {...base, id: 's2', name: '2枚目', cells: {}, defaultStyle: {font: 'Meiryo', size: 10, fill: 'none', borderBottom: 'none'}},
+    {...base, id: 's3', name: '3枚目', cells: {}, defaultStyle: {fill: 'none', borderBottom: 'none'}}];
+  const [s1, s2, s3] = read(book).sheets;
+  for (const a of ['A1', 'B1', 'A2', 'B2', 'A3', 'B3']) {
+    assert.equal(s1.cells[a]?.style.fill, '#fff2cc', a + ' の塗り');
+    assert.equal(s1.cells[a].style.borders.bottom.style, 'thin', a + ' の下の罫線');
+  }
+  assert.deepEqual([s1.cells.C1, s1.cells.A4], [undefined, undefined], '表の外のセルは書かない');
+  assert.deepEqual({name: s2.cells.B3?.style.font.name, size: s2.cells.B3?.style.font.size}, {name: 'メイリオ', size: 10}, 'Excelで空のセルに入力しても、HTMLと同じフォントになる');
+  assert.deepEqual(Object.keys(s3.cells), [], '既定の書式がExcelの標準と同じなら、空のセルは書かない');
 });
 
 test('罫線の種類と色を、Excelの線に対応させる', () => {
@@ -175,6 +222,22 @@ test('枠の固定・枠線の表示・倍率・最初に開くシート・選�
   assert.deepEqual(s3.view.selections, [{pane: 'bottomRight', activeCell: 'C4', sqref: 'C4:D5'}], '開いているシートの選択範囲');
 });
 
+test('選択は、アクティブなセルだけ・範囲だけの指定でも書き、開いていないシートの固定した枠には選択の場所だけを書く', () => {
+  const book = blankBook({activeSheet: 'a', view: {zoom: 100, active: [2, 3]}});
+  const base = book.sheets[0];
+  book.sheets = [{...base, id: 'a', name: 'A'}, {...base, id: 'b', name: 'B', freeze: {rows: 1, cols: 0}}];
+  const [a, b] = read(book).sheets;
+  assert.deepEqual(a.view.selections, [{pane: undefined, activeCell: 'D3', sqref: 'D3'}], 'アクティブなセルだけなら、その1セルを選ぶ');
+  assert.deepEqual(b.view.selections, [{pane: 'bottomLeft', activeCell: undefined, sqref: undefined}]);
+  const only = read(blankBook({view: {zoom: 100, selection: {r1: 1, c1: 1, r2: 2, c2: 3}}})).sheets[0];
+  assert.deepEqual(only.view.selections, [{pane: undefined, activeCell: 'B2', sqref: 'B2:D3'}], '範囲だけなら、左上がアクティブなセル');
+});
+
+test('倍率は整数の%にして書き、100%のときは書かない', () => {
+  const zoomOf = zoom => kid(kid(sheetOf(blankBook({view: {zoom}})).root, 'sheetViews'), 'sheetView').attrs.zoomScale;
+  assert.deepEqual([zoomOf(110.6), zoomOf(50), zoomOf(200), zoomOf(100)], ['111', '50', '200', undefined]);
+});
+
 test('印刷は、A4縦で、すべての列を1ページの幅に収める（縦のページ数は自動）', () => {
   const book = blankBook();
   book.sheets = [book.sheets[0], {...book.sheets[0], id: 'second', name: '2枚目'}];
@@ -218,6 +281,24 @@ test('画像は、置いたセルからのずれと大きさのまま、セル�
   assert.equal(x.sheets[1].pictures.length, 1, '画像はシートごとに置く');
 });
 
+test('GIFとWebPの画像も、その種類のまま書く', () => {
+  const gif = Buffer.from('GIF89a のかわり'), webp = Buffer.from('RIFF WEBP のかわり');
+  const book = blankBook({assets: {g: 'data:image/gif;base64,' + gif.toString('base64'), w: 'data:image/webp;base64,' + webp.toString('base64')},
+    sheet: {images: [{id: 'a', asset: 'g', r: 0, c: 0, x: 0, y: 0, w: 20, h: 20}, {id: 'b', asset: 'w', r: 2, c: 0, x: 0, y: 0, w: 20, h: 20}]}});
+  const x = read(book), [a, b] = x.sheets[0].pictures;
+  assert.deepEqual([x.typeOf(a.media), x.typeOf(b.media)], ['image/gif', 'image/webp']);
+  assert.deepEqual([a.bytes, b.bytes], [gif, webp]);
+});
+
+test('同じシートにリンクと画像があっても、参照先を取り違えない（結合で隠れたセルのリンクは書かない）', () => {
+  const book = blankBook({assets: {pic: 'data:image/png;base64,' + png.toString('base64')}, sheet: {merges: [{r1: 0, c1: 0, r2: 0, c2: 1}], cells: {
+    A1: {t: 's', v: '結合', link: 'https://example.com/merged'}, B1: {t: 's', v: '', link: 'https://example.com/hidden'}, A3: {t: 's', v: 'リンク', link: 'https://example.com/3'}},
+    images: [{id: 'p', asset: 'pic', r: 4, c: 1, x: 0, y: 0, w: 40, h: 30}]}});
+  const s = sheetOf(book);
+  assert.deepEqual(s.links, {A1: 'https://example.com/merged', A3: 'https://example.com/3'});
+  assert.deepEqual(s.pictures.map(p => p.bytes), [png]);
+});
+
 test('シートの名前と順番、ブックの題名を保つ', () => {
   const book = blankBook({title: '見積 & "明細"', activeSheet: 'a'});
   const base = book.sheets[0];
@@ -239,4 +320,16 @@ test('同じブックからは、毎回同じ内容のファイルを作る（�
   assert.deepEqual(toXlsx(book).bytes, toXlsx(structuredClone(book)).bytes);
   const core = read(book).parts.get('docProps/core.xml').toString('utf8');
   assert.ok(!/creator|lastModifiedBy|created|modified/.test(core), core);
+});
+
+test('同じ書式のセルは、Excelと同じく1つのセルの書式を共有する（セルの数だけ書式を増やさない）', () => {
+  const cells = {};
+  for (let r = 1; r <= 20; r++) {
+    cells['A' + r] = {t: 'n', v: r, s: {bold: true, fill: '#ffff00', numFmt: '#,##0'}};
+    cells['B' + r] = {t: 's', v: 'x', s: {bold: true}};
+  }
+  const x = read(blankBook({sheet: {cells}}));
+  assert.equal(new Set(Object.values(x.sheets[0].cells).map(c => c.styleIndex)).size, 2);
+  assert.deepEqual([x.styles.cellXfs.length, x.styles.fonts.length, x.styles.fills.length], [3, 3, 3],
+    'セルの書式は標準と2つ、フォントは標準・リンク・太字、塗りはExcelが必ず持つ2つと黄色');
 });

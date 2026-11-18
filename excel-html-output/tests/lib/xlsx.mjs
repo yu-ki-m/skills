@@ -24,6 +24,8 @@ export function makeZip(parts) {
 }
 
 const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+const OFFICE_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';
+const escXml = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const MINI_STYLES = '<fonts count="1"><font><sz val="11"/><name val="游ゴシック"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill>' +
   '<fill><patternFill patternType="gray125"/></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>' +
   '<border><left/><right/><top/><bottom style="thin"/><diagonal/></border></borders>' +
@@ -31,24 +33,76 @@ const MINI_STYLES = '<fonts count="1"><font><sz val="11"/><name val="游ゴシ�
   '<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"><alignment vertical="center"/></xf>' +
   '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0"><alignment vertical="center"/></xf>' +
   '<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0"><alignment vertical="center"/></xf></cellXfs>';
+
+/** A .rels part: [[id, type (the last word of an Office relationship type, or a whole URI), target, external]]. */
+export const relsXml = list => '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+  list.map(([id, type, target, external]) => `<Relationship Id="${id}" Type="${type.includes('/') ? type : OFFICE_REL + type}" Target="${escXml(target)}"` +
+    (external ? ' TargetMode="External"' : '') + '/>').join('') + '</Relationships>';
+
+/**
+ * The inside of <styleSheet>, in the order Excel requires. fonts, fills, borders: XML of each item (Excel's two required
+ * fills come first by default); xfs: the cell formats after cellXfs[0] (which is the Normal style, normal);
+ * numFmts: {id: format code}; colors: a <colors> element.
+ */
+export function stylesXml({numFmts = {}, fonts = ['<font><sz val="11"/><name val="游ゴシック"/><family val="3"/><charset val="128"/></font>'],
+  fills = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>'], borders = ['<border><left/><right/><top/><bottom/><diagonal/></border>'],
+  normal = '<xf numFmtId="0" fontId="0" fillId="0" borderId="0"><alignment vertical="center"/></xf>', xfs = [], colors = ''}) {
+  const list = (tag, items) => `<${tag} count="${items.length}">${items.join('')}</${tag}>`, codes = Object.entries(numFmts);
+  return (codes.length ? list('numFmts', codes.map(([id, code]) => `<numFmt numFmtId="${id}" formatCode="${escXml(code)}"/>`)) : '') +
+    list('fonts', fonts) + list('fills', fills) + list('borders', borders) + list('cellStyleXfs', [normal]) +
+    list('cellXfs', [normal.replace('<xf ', '<xf xfId="0" '), ...xfs]) + '<cellStyles count="1"><cellStyle name="標準" xfId="0" builtinId="0"/></cellStyles>' + colors;
+}
+
+/**
+ * A hand-written .xlsx file for the tests of scripts/read_xlsx.cjs.
+ * sheets: [{name, xml: the inside of <worksheet>, rels: [[id, type, target, external]], state: 'hidden', type: 'worksheet'}];
+ * strings: the <si> items, styles: the inside of <styleSheet> (null: no such part); workbook: elements put into
+ * workbook.xml before <sheets> (<workbookPr>, <bookViews>); theme: the inside of <a:clrScheme> (null: no theme part);
+ * core: the inside of docProps/core.xml (null: no such part); parts: more parts by name (text or Buffer).
+ */
+export function handXlsx({sheets, strings = '', styles = MINI_STYLES, workbook = '', theme = null, core = null, parts = {}}) {
+  const bookRels = sheets.map((s, i) => ['rId' + (i + 1), s.type || 'worksheet', `worksheets/sheet${i + 1}.xml`]);
+  const files = {
+    '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpg" ContentType="image/jpeg"/>' +
+      '<Default Extension="gif" ContentType="image/gif"/><Default Extension="emf" ContentType="image/x-emf"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('') +
+      (styles === null ? '' : '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>') +
+      (strings === null ? '' : '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>') +
+      (theme === null ? '' : '<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>') +
+      Object.keys(parts).filter(name => name.startsWith('xl/drawings/drawing')).map(name => `<Override PartName="/${name}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`).join('') +
+      (core === null ? '' : '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>') + '</Types>',
+    '_rels/.rels': relsXml([['rId1', 'officeDocument', 'xl/workbook.xml'],
+      ...(core === null ? [] : [['rId2', 'http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties', 'docProps/core.xml']])]),
+    'xl/workbook.xml': `<workbook ${NS}>${workbook}<sheets>` +
+      sheets.map((s, i) => `<sheet name="${escXml(s.name)}" sheetId="${i + 1}"${s.state ? ` state="${s.state}"` : ''} r:id="rId${i + 1}"/>`).join('') + '</sheets></workbook>',
+  };
+  sheets.forEach((s, i) => {
+    const root = s.type === 'chartsheet' ? 'chartsheet' : 'worksheet';
+    files[`xl/worksheets/sheet${i + 1}.xml`] = `<${root} ${NS}>${s.xml}</${root}>`;
+    if (s.rels) files[`xl/worksheets/_rels/sheet${i + 1}.xml.rels`] = relsXml(s.rels);
+  });
+  const add = (type, target, content) => { bookRels.push(['rId' + (bookRels.length + 1), type, target]); files['xl/' + target] = content; };
+  if (styles !== null) add('styles', 'styles.xml', `<styleSheet ${NS}>${styles}</styleSheet>`);
+  if (strings !== null) add('sharedStrings', 'sharedStrings.xml', `<sst ${NS}>${strings}</sst>`);
+  // A theme needs its fonts and formats as well for Excel to open the file.
+  const fill = '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>', fills = fill.repeat(3), font = name => `<a:latin typeface="${name}"/><a:ea typeface=""/><a:cs typeface=""/>`;
+  if (theme !== null) add('theme', 'theme/theme1.xml', '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements>' +
+    `<a:clrScheme name="T">${theme}</a:clrScheme><a:fontScheme name="T"><a:majorFont>${font('Yu Gothic Light')}</a:majorFont><a:minorFont>${font('Yu Gothic')}</a:minorFont></a:fontScheme>` +
+    `<a:fmtScheme name="T"><a:fillStyleLst>${fills}</a:fillStyleLst><a:lnStyleLst>${[6350, 12700, 19050].map(w => `<a:ln w="${w}">${fill}</a:ln>`).join('')}</a:lnStyleLst>` +
+    `<a:effectStyleLst>${'<a:effectStyle><a:effectLst/></a:effectStyle>'.repeat(3)}</a:effectStyleLst><a:bgFillStyleLst>${fills}</a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>`);
+  files['xl/_rels/workbook.xml.rels'] = relsXml(bookRels);
+  if (core !== null) files['docProps/core.xml'] = '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" ' +
+    `xmlns:dc="http://purl.org/dc/elements/1.1/">${core}</cp:coreProperties>`;
+  return makeZip({...files, ...parts});
+}
+
 /**
  * A small hand-written .xlsx with one sheet named S. sheet: the inside of <worksheet> (with <sheetData>); strings: the
  * <si> items; workbookPr: an element put into workbook.xml. Cell styles: s="1" has a thin bottom border, s="2" format 14.
  */
-export function miniXlsx({sheet, strings = '', workbookPr = '', styles = MINI_STYLES}) {
-  return makeZip({
-    '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/></Types>',
-    '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
-    'xl/workbook.xml': `<workbook ${NS}>${workbookPr}<sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`,
-    'xl/_rels/workbook.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
-      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
-      '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>',
-    'xl/worksheets/sheet1.xml': `<worksheet ${NS}>${sheet}</worksheet>`,
-    'xl/styles.xml': `<styleSheet ${NS}>${styles}</styleSheet>`,
-    'xl/sharedStrings.xml': `<sst ${NS}>${strings}</sst>`,
-  });
-}
+export const miniXlsx = ({sheet, strings = '', workbookPr = '', styles = MINI_STYLES}) => handXlsx({sheets: [{name: 'S', xml: sheet}], strings, styles, workbook: workbookPr});
 
 /** The parts of a zip file as a Map of name -> Buffer. Throws when a part's CRC-32 does not match its data. */
 export function unzip(buffer) {

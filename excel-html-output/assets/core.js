@@ -19,6 +19,16 @@
   // Border kinds that Excel can represent, with the clipboard CSS Excel itself writes for them.
   const BORDER_XL = {'0.5px solid':'.5pt hairline','1px solid':'.5pt solid','2px solid':'1.0pt solid','3px solid':'1.5pt solid',
     '1px dashed':'.5pt dashed','2px dashed':'1.0pt dashed','1px dotted':'.5pt dotted','3px double':'2.0pt double'};
+  // What a book can hold, besides the style keys of DEFAULT and the formats and borders above. validate takes nothing
+  // else and the formulas compute only FUNCTIONS, so a new feature has to be added to these lists, and then
+  // tests/xlsx-features.test.mjs asks for its samples written to xlsx and read back (SKILL.md, 実装を変えるとき).
+  const CHOICES={align:['general','left','center','right'],valign:['top','middle','bottom']};
+  const CELL_TYPES=['s','n','b','f'];
+  const FUNCTIONS=['SUM','AVERAGE','MIN','MAX','COUNT','COUNTA','IF','IFERROR','AND','OR','NOT','ROUND','ROUNDDOWN','ROUNDUP','INT','ABS','MOD'];
+  const FIELDS={book:['schema','id','revision','title','activeSheet','defaultStyle','view','assets','sheets'],
+    sheet:['id','name','rows','cols','cells','merges','colWidths','rowHeights','freeze','gridlines','images','defaultStyle'],
+    cell:['t','v','f','s','link'],view:['zoom','active','selection','scrollTop','scrollLeft'],freeze:['rows','cols'],
+    range:['r1','c1','r2','c2'],image:['id','asset','r','c','x','y','w','h']};
   const clone = value => JSON.parse(JSON.stringify(value));
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const colName = n => { let out=''; for(n++;n>0;n=Math.floor((n-1)/26)) out=String.fromCharCode(65+(n-1)%26)+out; return out; };
@@ -49,7 +59,10 @@
   function validate(w,{assetsDetached=false}={}) {
     const fail=m=>{throw Error('ブック形式エラー: '+m);};
     const integer=(n,min,max)=>Number.isInteger(n)&&n>=min&&n<=max;
+    // A field the page does not have is refused, as an unknown style key is, rather than kept unseen and lost later.
+    const fields=(kind,o,where)=>{for(const k of Object.keys(o))if(!FIELDS[kind].includes(k))fail('未対応の項目 '+where+k);};
     if(!w||w.schema!==SCHEMA||typeof w.id!=='string'||!w.id||typeof w.revision!=='string'||!w.revision) fail('schema / id / revision');
+    fields('book',w,'');
     if(typeof w.title!=='string'||!Array.isArray(w.sheets)||!w.sheets.length||w.sheets.length>30) fail('title / sheets');
     if(w.assets!==undefined){
       if(!w.assets||typeof w.assets!=='object'||Array.isArray(w.assets)) fail('assets');
@@ -65,21 +78,24 @@
         if(k==='size'&&!(Number.isFinite(v)&&v>=6&&v<=96)) fail('size');
         if(k==='indent'&&!integer(v,0,15)) fail('indent');
         if(['bold','italic','underline','strike','wrap'].includes(k)&&typeof v!=='boolean') fail(k);
-        if(k==='align'&&!['general','left','center','right'].includes(v)) fail(k);
-        if(k==='valign'&&!['top','middle','bottom'].includes(v)) fail(k);
+        if(k==='align'&&!CHOICES.align.includes(v)) fail(k);
+        if(k==='valign'&&!CHOICES.valign.includes(v)) fail(k);
         if(k==='numFmt'&&!FORMATS.includes(v)) fail('表示形式 '+v);
         if(k.startsWith('border')&&v!=='none'&&!(typeof v==='string'&&/^\S+ \S+ #[\da-f]{6}$/i.test(v)&&BORDER_XL[v.split(' ').slice(0,2).join(' ')])) fail(k+'（Excelで表せる線: '+Object.keys(BORDER_XL).join(' / ')+'）');
       }
     };
     vs(w.defaultStyle);
-    for(const s of w.sheets) {
+    for(const [si,s] of w.sheets.entries()) {
+      const at='sheets['+si+'].';
       if(typeof s.id!=='string'||!s.id||ids.has(s.id)) fail('重複したsheet id'); ids.add(s.id);
+      fields('sheet',s,at);
       if(typeof s.name!=='string'||!s.name||s.name.length>31||/[\\/?*\[\]:]/.test(s.name)||names.has(s.name.toLowerCase())) fail('シート名'); names.add(s.name.toLowerCase());
       if(!integer(s.rows,1,500)||!integer(s.cols,1,100)) fail('上限500行 / 100列');
       if(!s.cells||typeof s.cells!=='object'||Array.isArray(s.cells)||!Array.isArray(s.merges)) fail('cells / merges');
       for(const [key,cell] of Object.entries(s.cells)) {
         const [r,c]=coord(key); if(key!==addr(r,c)||r>=s.rows||c>=s.cols) fail('範囲外のセル '+key);
-        if(!cell||!['s','n','b','f'].includes(cell.t)) fail('型 '+key);
+        if(!cell||!CELL_TYPES.includes(cell.t)) fail('型 '+key);
+        fields('cell',cell,at+'cells.'+key+'.');
         if(cell.t==='s'&&typeof cell.v!=='string'||cell.t==='n'&&!Number.isFinite(cell.v)||cell.t==='b'&&typeof cell.v!=='boolean') fail('値 '+key);
         if(cell.t==='f'&&(typeof cell.f!=='string'||!cell.f.startsWith('='))) fail('数式 '+key);
         if(cell.link && (typeof cell.link!=='string'||!/^https?:\/\//i.test(cell.link))) fail('リンクはhttp(s)のみ');
@@ -91,17 +107,21 @@
       }
       for(let i=0;i<s.merges.length;i++){
         const m=s.merges[i]; if(!m||!integer(m.r1,0,s.rows-1)||!integer(m.r2,m.r1,s.rows-1)||!integer(m.c1,0,s.cols-1)||!integer(m.c2,m.c1,s.cols-1)) fail('結合範囲');
+        fields('range',m,at+'merges['+i+'].');
         if(s.merges.slice(0,i).some(x=>overlap(x,m))) fail('結合の重複');
         each(m,(r,c)=>{if(r===m.r1&&c===m.c1)return;const cell=get(s,r,c);if(cell.t==='f'||cell.v!==''&&cell.v!==undefined)fail('結合セル内の隠れた値 '+addr(r,c));});
       }
       if(s.freeze&&(!integer(s.freeze.rows,0,s.rows)||!integer(s.freeze.cols,0,s.cols))) fail('固定範囲');
       if(s.freeze&&s.merges.some(m=>m.r1<s.freeze.rows&&m.r2>=s.freeze.rows||m.c1<s.freeze.cols&&m.c2>=s.freeze.cols)) fail('結合をまたぐ固定は未対応');
+      if(s.freeze) fields('freeze',s.freeze,at+'freeze.');
+      if(s.gridlines!==undefined&&typeof s.gridlines!=='boolean') fail('gridlines（true / false）');
       if(s.images!==undefined){
         if(!Array.isArray(s.images)||s.images.length>100) fail('images（1シート100枚まで）');
         const seen=new Set();
-        for(const p of s.images){
+        for(const [pi,p] of s.images.entries()){
           if(!p||typeof p.id!=='string'||!p.id||seen.has(p.id)||typeof p.asset!=='string'||!p.asset||!integer(p.r,0,s.rows-1)||!integer(p.c,0,s.cols-1)||![p.x,p.y].every(v=>Number.isFinite(v)&&v>=0&&v<=20000)||![p.w,p.h].every(v=>Number.isFinite(v)&&v>=4&&v<=10000)) fail('画像 '+(p&&p.id||''));
           seen.add(p.id);
+          fields('image',p,at+'images['+pi+'].');
           if(!assetsDetached&&!(w.assets&&Object.prototype.hasOwnProperty.call(w.assets,p.asset))) fail('画像の中身がありません '+p.id);
         }
       }
@@ -110,8 +130,9 @@
     if(w.view){
       if(typeof w.view!=='object'||Array.isArray(w.view)||!Number.isFinite(w.view.zoom)||w.view.zoom<50||w.view.zoom>200)fail('zoom');
       const s=w.sheets.find(s=>s.id===w.activeSheet),v=w.view;
+      fields('view',v,'view.');
       if(v.active!==undefined&&(!Array.isArray(v.active)||v.active.length!==2||!integer(v.active[0],0,s.rows-1)||!integer(v.active[1],0,s.cols-1)))fail('view.active');
-      if(v.selection!==undefined){const q=v.selection;if(!q||!integer(q.r1,0,s.rows-1)||!integer(q.r2,q.r1,s.rows-1)||!integer(q.c1,0,s.cols-1)||!integer(q.c2,q.c1,s.cols-1))fail('view.selection');}
+      if(v.selection!==undefined){const q=v.selection;if(!q||!integer(q.r1,0,s.rows-1)||!integer(q.r2,q.r1,s.rows-1)||!integer(q.c1,0,s.cols-1)||!integer(q.c2,q.c1,s.cols-1))fail('view.selection');fields('range',q,'view.selection.');}
       for(const key of ['scrollTop','scrollLeft'])if(v[key]!==undefined&&(!Number.isFinite(v[key])||v[key]<0))fail('view.'+key);
     }
     return w;
@@ -158,9 +179,11 @@
       if(n.op==='literal')return n.v;if(n.op==='ref')return ref(n.a,n.b);
       if(n.op==='unary')return number(run(n.x))*(n.sign==='-'?-1:1);if(n.op==='percent')return number(run(n.x))/100;
       if(n.op==='binary'){const a=run(n.l),b=run(n.r);if(isErr(a))throw Error(a);if(isErr(b))throw Error(b);const aa=typeof a==='string'?a.toLowerCase():a,bb=typeof b==='string'?b.toLowerCase():b;switch(n.sign){case '&':return String(a)+String(b);case '=':return aa===bb;case '<>':return aa!==bb;case '<':return aa<bb;case '>':return aa>bb;case '<=':return aa<=bb;case '>=':return aa>=bb;case '+':return number(a)+number(b);case '-':return number(a)-number(b);case '*':return number(a)*number(b);case '/':if(number(b)===0)throw Error('#DIV/0!');return number(a)/number(b);case '^':return number(a)**number(b);}}
-      if(n.name==='IF'){if(n.args.length<2||n.args.length>3)throw Error('#VALUE!');const condition=run(n.args[0]);if(isErr(condition))throw Error(condition);return condition?run(n.args[1]):n.args[2]?run(n.args[2]):false;}
-      if(n.name==='IFERROR'){if(n.args.length!==2)throw Error('#VALUE!');let v;try{v=run(n.args[0]);}catch(e){if(isErr(e.message))return run(n.args[1]);throw e;}return isErr(v)||Array.isArray(v)?run(n.args[1]):v;}
-      const args=n.args.map(run).flat();for(const v of args)if(isErr(v))throw Error(v);const nums=args.filter(x=>typeof x==='number');
+      // A function outside FUNCTIONS is #NAME?; an error in its arguments comes first, as Excel shows for VLOOKUP(1/0,...).
+      const listed=FUNCTIONS.includes(n.name);
+      if(listed&&n.name==='IF'){if(n.args.length<2||n.args.length>3)throw Error('#VALUE!');const condition=run(n.args[0]);if(isErr(condition))throw Error(condition);return condition?run(n.args[1]):n.args[2]?run(n.args[2]):false;}
+      if(listed&&n.name==='IFERROR'){if(n.args.length!==2)throw Error('#VALUE!');let v;try{v=run(n.args[0]);}catch(e){if(isErr(e.message))return run(n.args[1]);throw e;}return isErr(v)||Array.isArray(v)?run(n.args[1]):v;}
+      const args=n.args.map(run).flat();for(const v of args)if(isErr(v))throw Error(v);if(!listed)throw Error('#NAME?');const nums=args.filter(x=>typeof x==='number');
       switch(n.name){case 'SUM':return nums.reduce((a,b)=>a+b,0);case 'AVERAGE':if(!nums.length)throw Error('#DIV/0!');return nums.reduce((a,b)=>a+b,0)/nums.length;case 'MIN':return nums.length?Math.min(...nums):0;case 'MAX':return nums.length?Math.max(...nums):0;case 'COUNT':return nums.length;case 'COUNTA':return args.filter(x=>x!=='').length;case 'ROUNDDOWN':case 'ROUNDUP':{if(args.length!==2)throw Error('#VALUE!');const x=number(args[0]),f=10**Math.trunc(number(args[1])),a=+(Math.abs(x)*f).toPrecision(15);return Math.sign(x)*(n.name==='ROUNDUP'?Math.ceil(a):Math.floor(a))/f;}case 'INT':if(args.length!==1)throw Error('#VALUE!');return Math.floor(+number(args[0]).toPrecision(15));case 'ABS':if(args.length!==1)throw Error('#VALUE!');return Math.abs(number(args[0]));case 'MOD':{if(args.length!==2)throw Error('#VALUE!');const a=number(args[0]),b=number(args[1]);if(b===0)throw Error('#DIV/0!');return a-b*Math.floor(a/b);}case 'AND':case 'OR':{const v=args.filter(x=>typeof x!=='string').map(x=>!!number(x));if(!v.length)throw Error('#VALUE!');return n.name==='AND'?v.every(Boolean):v.some(Boolean);}case 'NOT':if(args.length!==1)throw Error('#VALUE!');return !number(args[0]);case 'ROUND':if(args.length!==2)throw Error('#VALUE!');return Math.sign(number(args[0]))*Math.round((Math.abs(args[0])+Number.EPSILON)*10**number(args[1]))/10**args[1];default:throw Error('#NAME?');}
     }
     const ast=expression();if(i!==tok.length)throw Error('#NAME?');if(parseOnly)return ast;const result=run(ast);return Array.isArray(result)?'#VALUE!':result;
@@ -401,6 +424,6 @@
       throw Error('状態テキストの最後の行が ' + STATE_END + ' ではありません。途中で切れているので、コピーし直したテキストか、エクスポートしたファイルを渡してください。');
     return TOON.decode(end > nl ? raw.slice(nl + 1, end) : '', {firstLine: 2});
   }
-  return {SCHEMA,SIZE_LIMITS,FORMATS,MSO_FORMAT,BORDER_XL,DEFAULT,FONT_ALIAS,stateText,readStateText,selectionArea,splitsMerge,xlCss,excelWouldConvert,blockFormula,generalAlign,
+  return {SCHEMA,SIZE_LIMITS,FORMATS,MSO_FORMAT,BORDER_XL,DEFAULT,FONT_ALIAS,CHOICES,CELL_TYPES,FUNCTIONS,FIELDS,stateText,readStateText,selectionArea,splitsMerge,xlCss,excelWouldConvert,blockFormula,generalAlign,
     fontCharset,cssUnescape,parseDecls,parseRules,cssHex,formatFromMso,borderFromCss,styleFromDecls,valueFromDisplay,clone,esc,colName,addr,coord,rect,range,within,overlap,same,each,get,style,mergeAt,expanded,validate,width,height,infer,raw,isErr,calculate,evalFormula,display,css,shiftFormula,rangeData,clipboard,markdown,parseTSV,paste};
 });
