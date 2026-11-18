@@ -119,19 +119,49 @@ Excelはセルの辺ごとに線を1本しか持てない。
 
 ## 数式
 
-HTMLで計算できるのは、同じシートのA1参照（`$` 付きを含む）と範囲、四則演算、べき乗、`%`、比較、`&`、括弧、文字列である。
-関数は SUM / AVERAGE / MIN / MAX / COUNT / COUNTA / IF / IFERROR / AND / OR / NOT / ROUND / ROUNDDOWN / ROUNDUP / INT / ABS / MOD と、文字をつなぐ CONCATENATE / CONCAT / TEXTJOIN に限る。
-未対応の関数は `#NAME?`、不正な引数は `#VALUE!`、循環参照は `#CIRC!` と表示する。
-式の評価に `eval` や `Function` は使っていない。
+HTMLで計算できるのは、同じシートのA1参照（`$` 付きを含む）と範囲、数値・文字列・`TRUE`/`FALSE`・エラー値（`#N/A` など）、演算子、括弧、次の139の関数である。
+数式の読み取りと計算は `assets/formulas.js` が行い、式の評価に `eval` や `Function` は使っていない。
+
+| 分類 | 関数 |
+|---|---|
+| 論理・情報 | IF, IFS, IFERROR, IFNA, AND, OR, XOR, NOT, TRUE, FALSE, NA, SWITCH, CHOOSE, ISBLANK, ISNUMBER, ISTEXT, ISNONTEXT, ISLOGICAL, ISERROR, ISERR, ISNA, ISEVEN, ISODD, N, T |
+| 数学 | SUM, PRODUCT, SUMPRODUCT, ROUND, ROUNDUP, ROUNDDOWN, TRUNC, INT, ABS, MOD, QUOTIENT, SIGN, SQRT, POWER, EXP, LN, LOG, LOG10, PI, CEILING, FLOOR, CEILING.MATH, FLOOR.MATH, MROUND |
+| 統計 | AVERAGE, MIN, MAX, COUNT, COUNTA, COUNTBLANK, MEDIAN, MODE, MODE.SNGL, LARGE, SMALL, RANK, RANK.EQ, STDEV, STDEV.S, STDEVP, STDEV.P, VAR, VAR.S, VARP, VAR.P, SUBTOTAL |
+| 条件つきの集計 | COUNTIF, COUNTIFS, SUMIF, SUMIFS, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS |
+| 検索・参照 | VLOOKUP, HLOOKUP, XLOOKUP, LOOKUP, MATCH, XMATCH, INDEX, ROW, COLUMN, ROWS, COLUMNS |
+| 文字列 | LEN, LEFT, RIGHT, MID, FIND, SEARCH, SUBSTITUTE, REPLACE, TRIM, CLEAN, UPPER, LOWER, PROPER, REPT, EXACT, CHAR, CODE, UNICHAR, UNICODE, ASC, JIS（DBCS）, VALUE, TEXT, CONCATENATE, CONCAT, TEXTJOIN |
+| 日付・時刻 | TODAY, NOW, DATE, TIME, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, WEEKDAY, WEEKNUM, ISOWEEKNUM, EDATE, EOMONTH, DATEDIF, DAYS, NETWORKDAYS, NETWORKDAYS.INTL, WORKDAY, WORKDAY.INTL, DATEVALUE, TIMEVALUE |
+
+どの関数も、デスクトップ版Excelで同じ数式を計算させた値と比べて、同じ値を返すように作ってある（[Excelとの互換性](excel-compatibility.md#関数の計算)）。
+引数の扱いもExcelと同じである。
+例えば、数字だけの文字列（`"2"`、`"2026/1/2"`、`"12:30"`）は計算で数値として使われ、空のセルは計算では0、文字では空の文字になる。
+引数は省略して空にしてもよい（`=IF(A1>0,"済",)` の偽の値は0）。
+演算子の優先順位もExcelと同じで、符号の `-` はべき乗より先に計算する（`=-2^2` は4）。
+同じ優先順位の演算子は左から順に計算する（`=2^3^2` は64）。
+表にない関数は `#NAME?` と表示するので使わない。
+TEXTBEFORE や TEXTAFTER のように、Microsoft 365 にだけある関数も表にない。
+測ったExcel（Excel 2021）にはなく、貼り付けた先で `#NAME?` になるからである。
+
+範囲は、関数の範囲の引数（SUM、COUNTIF、VLOOKUP の表など）に渡す。
+1つの値を受け取る場所（`&` や IF の条件など）に範囲を書くと、Excelの数式と同じく、数式と同じ行（横に並んだ範囲なら同じ列）のセルの値だけを使う。
+範囲どうしの計算は SUMPRODUCT の中でだけできる。
+例えば、`=SUMPRODUCT((B2:B10="東京")*C2:C10)` は、B列が「東京」の行のC列を合計する。
+列全体や行全体の参照（`B:B`、`2:2`）、配列定数（`{1,2,3}`）、別のシートの参照、名前、結果が複数のセルに広がる数式（動的配列）は使えない。
+
+日付は、1900年1月1日を1とする通し番号（シリアル値）で計算する。
+`=DATE(2026,1,2)` や `=TODAY()` の結果を日付として見せるには、セルに `numFmt:"yyyy/mm/dd"` を付ける。
+Excelはこれらの数式を入力したセルに日付の表示形式を自動で付けるが、HTMLは付けないので、付けないと `46024` のような数で表示される。
+TODAY と NOW は、計算したときのパソコンの時計の日付と時刻を返す。
 
 文字をつなぐ数式（`&`・CONCATENATE・CONCAT・TEXTJOIN）は、Excelと同じ文字を返す。
 数値は有効数字15桁の文字になり、セルの表示形式は使わない。
 そのため、2026/01/01と表示した日付をつなぐと `46023`（シリアル値）になり、12.5%と表示した比率は `0.125` になる。
-HTMLにはTEXT関数がないので、日付や金額を表示どおりの文字でつなぐ必要があれば、その文字を文字列として入れる。
+表示どおりの文字でつなぐには、TEXT関数でその文字にする（`=TEXT(A2,"yyyy年m月d日")&"納品"`、`=TEXT(B2,"#,##0")&"円"`）。
+TEXT関数は、Excelの表示形式の書き方（和暦の `ggge`、曜日の `aaa` を含む）を読む。
 範囲のセルをまとめてつなぐときは、CONCAT か TEXTJOIN を使う（`=TEXTJOIN("、",TRUE,B2:D2)` は空のセルを除いて「、」でつなぐ）。
-`&` と CONCATENATE に範囲を渡すと、Excelと同じく、数式と同じ行（横に並んだ範囲なら同じ列）のセルの値だけを使う。
-数字だけの文字列（`"2"` など）は、Excelと違って計算には使えず、`#VALUE!` になる。
 細かい規則は [Excelとの互換性](excel-compatibility.md#文字をつなぐ数式) にある。
+
+不正な引数は `#VALUE!` のようにExcelと同じエラーを表示し、循環参照は `#CIRC!` と表示する。
 
 Excelに貼ると、参照先がすべてコピー範囲の中にある数式は、数式のまま入る。
 範囲の外を参照する数式は、HTMLが計算した値で入る。

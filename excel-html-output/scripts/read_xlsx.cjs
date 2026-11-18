@@ -327,6 +327,26 @@ function sharedStrings(parts, path, book) {
   if (!path || !parts.has(path)) return [];
   return kids(parseXml(parts.get(path).toString('utf8')), 'si').map(si => stringItem(si, book));
 }
+/**
+ * What each rich value a cell's vm points to (vm 1 is the first) is, as the file names its structure: _error for an error
+ * with more about it, _localImage for a picture in a cell, and so on. The way leads from metadata.xml (the vm's block,
+ * its metadata type and the block of that type) to richData (the rich value and its structure).
+ */
+function richValueKinds(parts, byType) {
+  const read = type => { const p = byType(type); return p && parts.has(p) ? parseXml(parts.get(p).toString('utf8')) : null; };
+  const meta = read('sheetMetadata');
+  if (!meta) return [];
+  const values = kids(read('rdRichValue'), 'rv'), structures = kids(read('rdRichValueStructure'), 's');
+  const typeNames = kids(kid(meta, 'metadataTypes'), 'metadataType').map(t => t.attrs.name);
+  const future = Object.fromEntries(kids(meta, 'futureMetadata').map(f => [f.attrs.name, kids(f, 'bk')]));
+  const find = (el, name) => { for (const k of kids(el)) { if (local(k.name) === name) return k; const d = find(k, name); if (d) return d; } return null; };
+  return kids(kid(meta, 'valueMetadata'), 'bk').map(bk => {
+    const rc = kid(bk, 'rc');
+    if (!rc || typeNames[+rc.attrs.t - 1] !== 'XLRICHVALUE') return null;
+    const rvb = find((future.XLRICHVALUE || [])[+rc.attrs.v], 'rvb'), rv = rvb && values[+rvb.attrs.i];
+    return rv ? structures[+rv.attrs.s]?.attrs.t ?? null : null;
+  });
+}
 // The text of a <t> as Excel reads it: without the spaces, tabs and line ends around it, unless xml:space="preserve".
 const tText = t => { const s = textOf(t); return t?.attrs['xml:space'] === 'preserve' ? s : s.replace(/^[ \t\n]+|[ \t\n]+$/g, ''); };
 /** The font a run's <rPr> gives its characters; what it leaves out (name, size, colour) is the cell's. */
@@ -427,8 +447,10 @@ function readSheet(parts, book, info, index, report) {
           else { const master = shared.get(f.attrs.si); if (master) formula = C.shiftFormula('=' + master.text, rr - master.r, cc - master.c).slice(1); }
         } else formula = shownFormula(textOf(f)) || null;
       }
-      // A picture in a cell or a data type (a rich value, vm) is saved with an error value that Excel does not show.
-      const richValue = c.attrs.vm !== undefined;
+      // A picture in a cell or a data type (a rich value, vm) is saved with an error value that Excel does not show. An
+      // error that Excel saved with more about it (a rich value _error, as for #VALUE! of VLOOKUP(5,A1:C8,0,FALSE)) is
+      // shown as the error it is.
+      const richValue = c.attrs.vm !== undefined && book.richKinds[+c.attrs.vm - 1] !== '_error';
       if (richValue) inCell.push(C.addr(rr, cc));
       cells.set(C.addr(rr, cc), {r: rr, c: cc, value: richValue ? null : cellValue(c, book), formula, formulaKind, ref: f?.attrs.ref, xf: +(c.attrs.s || 0)});
     }
@@ -724,6 +746,7 @@ function fromXlsx(buffer, {name = 'book.xlsx'} = {}) {
   if (indexed.length) book.palette = indexed;
   book.styles = readStyles(stylesXml, book);
   book.strings = sharedStrings(parts, byType('sharedStrings'), book);
+  book.richKinds = richValueKinds(parts, byType);
   const normal = book.styles.normal.font;
   const digit11 = DIGIT_PX_11[String(normal.name).toLowerCase()];
   book.digitPx = Math.max(5, Math.round((digit11 ?? 8) * normal.size / 11));

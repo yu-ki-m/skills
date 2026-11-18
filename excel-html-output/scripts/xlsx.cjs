@@ -10,6 +10,7 @@
 const path = require('path');
 const zlib = require('zlib');
 const C = require(path.join(__dirname, '..', 'assets', 'core.js'));
+const F = require(path.join(__dirname, '..', 'assets', 'formulas.js'));
 
 const MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -53,17 +54,19 @@ const num = n => String(Object.is(n, -0) ? 0 : n);
 const hex = color => color.slice(1).toUpperCase();
 const ref = q => q.r1 === q.r2 && q.c1 === q.c2 ? C.addr(q.r1, q.c1) : C.addr(q.r1, q.c1) + ':' + C.addr(q.r2, q.c2);
 
-// Functions Excel added after the file format was set, which Excel saves with _xlfn. before their names (desktop Excel 16.0
-// saved _xlfn.CONCAT( and _xlfn.TEXTJOIN(, and CONCATENATE( as it is). Without it, Excel shows #NAME? for the formula, even
-// after it computes the formulas again.
-const NEWER_FUNCTIONS = ['CONCAT', 'TEXTJOIN'];
-
-// The formula as Excel stores it: without "=", with function names and references in capitals (strings left alone), and
-// _xlfn. before the newer functions. Returns null when the page's formula reader cannot read it, since Excel would refuse
-// the whole file for it.
+// Functions Excel added after the file format was set, which Excel saves with _xlfn. before their names: these are the
+// ones of FUNCTIONS that desktop Excel 16.0 saved so (tests/fixtures/excel-functions.xlsx; NETWORKDAYS.INTL, WORKDAY.INTL
+// and CONCATENATE it saved as they are). Without it, Excel shows #NAME? for the formula, even after it computes the
+// formulas again.
+const NEWER_FUNCTIONS = ['CEILING.MATH', 'CONCAT', 'DAYS', 'FLOOR.MATH', 'IFNA', 'IFS', 'ISOWEEKNUM', 'MAXIFS', 'MINIFS', 'MODE.SNGL', 'RANK.EQ',
+  'STDEV.P', 'STDEV.S', 'SWITCH', 'TEXTJOIN', 'UNICHAR', 'UNICODE', 'VAR.P', 'VAR.S', 'XLOOKUP', 'XMATCH', 'XOR'];
+// The formula as Excel stores it: without "=", with function names and references in capitals (strings left alone), the
+// names every Excel reads (=JIS( is written DBCS(, the name of the function the Japanese Excel shows as JIS) and _xlfn.
+// before the newer functions. Returns null when the page's formula reader cannot read it, since Excel would refuse the
+// whole file for it.
 function excelFormula(f) {
   try { C.evalFormula(f, null, true); } catch { return null; }
-  return f.slice(1).replace(/"(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_.]*/g, (t, at, all) => {
+  return F.englishNames(f).slice(1).replace(/"(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_.]*/g, (t, at, all) => {
     if (t[0] === '"') return t;
     const name = t.toUpperCase();
     return NEWER_FUNCTIONS.includes(name) && /^\s*\(/.test(all.slice(at + t.length)) ? '_xlfn.' + name : name;
@@ -357,7 +360,7 @@ function toXlsx(w) {
   return {bytes: zip([['[Content_Types].xml', contentTypes], ...parts.map(([name, data]) => [name, data])]), warnings};
 }
 
-module.exports = {toXlsx};
+module.exports = {toXlsx, NEWER_FUNCTIONS};
 
 if (require.main === module) {
   let input = '';

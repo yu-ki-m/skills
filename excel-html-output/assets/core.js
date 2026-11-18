@@ -1,8 +1,8 @@
-/* Excel HTML Output — original implementation, no runtime dependencies. */
+/* Excel HTML Output — original implementation, no runtime dependencies. Formulas are read and computed by formulas.js. */
 (function(root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./toon.js'));
-  else root.ExcelHTMLCore = factory(root.ExcelHTMLToon);
-})(typeof globalThis !== 'undefined' ? globalThis : this, function(TOON) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./toon.js'), require('./formulas.js'));
+  else root.ExcelHTMLCore = factory(root.ExcelHTMLToon, root.ExcelHTMLFormulas);
+})(typeof globalThis !== 'undefined' ? globalThis : this, function(TOON, F) {
   'use strict';
   const SCHEMA = 'excel-html-workbook/v1';
   // Column widths and row heights as [smallest, largest], in CSS pixels. The largest are Excel's: the widest column
@@ -24,16 +24,8 @@
   // tests/xlsx-features.test.mjs asks for its samples written to xlsx and read back (SKILL.md, 実装を変えるとき).
   const CHOICES={align:['general','left','center','right'],valign:['top','middle','bottom']};
   const CELL_TYPES=['s','n','b','f'];
-  const FUNCTIONS=['SUM','AVERAGE','MIN','MAX','COUNT','COUNTA','IF','IFERROR','AND','OR','NOT','ROUND','ROUNDDOWN','ROUNDUP','INT','ABS','MOD',
-    'CONCATENATE','CONCAT','TEXTJOIN'];
-  // Functions whose arguments may be left empty, as in =TEXTJOIN(,TRUE,A1:A3): Excel reads such an argument as empty text
-  // (the ignore_empty of TEXTJOIN as TRUE). Each other function reads an empty argument in a way of its own, which the
-  // page does not compute, so a formula with one stays unreadable there.
-  const EMPTY_ARGS=['CONCATENATE','CONCAT','TEXTJOIN'];
-  // The longest text an Excel cell holds. & and CONCATENATE cut a longer text there; CONCAT and TEXTJOIN give #VALUE!.
-  // Desktop Excel 16.0 (build 20326) shows #CALC! for those, but saves it in the file as #VALUE! (which older versions
-  // show), and takes #CALC! from the clipboard only as text, so the page keeps to #VALUE!.
-  const MAX_TEXT=32767;
+  // The functions the formulas compute (formulas.js): a function taken out of this list is #NAME?.
+  const FUNCTIONS=F.FUNCTIONS;
   const FIELDS={book:['schema','id','revision','title','activeSheet','defaultStyle','view','assets','sheets'],
     sheet:['id','name','rows','cols','cells','merges','colWidths','rowHeights','freeze','gridlines','images','defaultStyle'],
     cell:['t','v','f','s','link'],view:['zoom','active','selection','scrollTop','scrollLeft'],freeze:['rows','cols'],
@@ -158,123 +150,26 @@
     return {...st,t:'s',v:text};
   }
   const raw=cell=>cell.t==='f'?cell.f:cell.t==='b'?(cell.v?'TRUE':'FALSE'):String(cell.v??'');
-  const isErr=x=>typeof x==='string'&&/^#(?:REF!|NAME\?|VALUE!|DIV\/0!|NUM!|CIRC!|N\/A)$/.test(x);
-  // A number as Excel writes it when it joins text (=A1&"", CONCAT, TEXTJOIN; measured on desktop Excel 16.0): rounded to
-  // 15 significant digits, an exact half toward zero, and written out in full when that takes 20 characters at most (the
-  // sign aside), else as 1.5E-18. The rounding looks at the exact value of the double, as Excel's does: 1234567890.000005
-  // is a little over 1234567890.0000050 and becomes 1234567890.00001. Where 15 digits would round past the largest
-  // number, Excel keeps 14 (1.7976931348623E+308).
-  function numberText(x) {
-    if(Number.isInteger(x)&&Math.abs(x)<1e15)return String(x); // 15 digits at most, nothing to round (-0 too is "0")
-    const bits=new DataView(new ArrayBuffer(8));bits.setFloat64(0,Math.abs(x));
-    const hi=bits.getUint32(0),e=hi>>>20,q=e?e-1075:-1074;
-    const m=BigInt(hi&0xfffff)*4294967296n+BigInt(bits.getUint32(4))+(e?1n<<52n:0n);
-    // |x| = m × 2^q = 0.(all the digits of s) × 10^point.
-    const s=q>=0?(m<<BigInt(q)).toString():(m*5n**BigInt(-q)).toString(),exact=s.replace(/0+$/,''),point=s.length+Math.min(q,0);
-    const round=n=>{let d=exact.slice(0,n),p=point;if(exact.slice(n)>'5'){d=String(BigInt(d)+1n);if(d.length>n)p++;}return {d:d.replace(/0+$/,''),p};};
-    let {d,p}=round(15);if(!Number.isFinite(+('0.'+d+'e'+p)))({d,p}=round(14));
-    const sign=x<0?'-':'',full=p<=0?'0.'+'0'.repeat(-p)+d:d.length<=p?d+'0'.repeat(p-d.length):d.slice(0,p)+'.'+d.slice(p);
-    if(full.length<=20)return sign+full;
-    return sign+d[0]+(d.length>1?'.'+d.slice(1):'')+'E'+(p>0?'+':'-')+String(Math.abs(p-1)).padStart(2,'0');
-  }
+  const isErr=F.isErr,BLANK=F.BLANK;
+  // The value of the cell at (r, c): a formula computed (each cell once per cache), or the value written in the cell. An
+  // empty cell is "" here; a formula reads it as F.BLANK (0, "" or FALSE, by what it is used for).
   function calculate(w, sheet, r, c, stack=new Set(), cache=new Map()) {
     const key=sheet.id+'!'+addr(r,c); if(cache.has(key))return cache.get(key); if(stack.has(key))return '#CIRC!';
     const cell=get(sheet,r,c);if(cell.t!=='f')return cell.v??'';
     stack.add(key);let value;
-    // A range gives the values of its cells row by row, with the range itself for the implicit intersection (evalFormula).
-    try {value=evalFormula(cell.f, (a,b)=>{const [rr,cc]=coord(a);if(rr>=sheet.rows||cc>=sheet.cols)return '#REF!';if(!b)return calculate(w,sheet,rr,cc,stack,cache);const q=range(a+':'+b),v=[];if(q.r2>=sheet.rows||q.c2>=sheet.cols)return '#REF!';each(q,(r1,c1)=>v.push(calculate(w,sheet,r1,c1,stack,cache)));v.range=q;return v;},false,[r,c]);}
+    // What a formula reads from a cell: BLANK for an empty cell, which ISBLANK and COUNTA tell from a formula that gives "".
+    const read=(rr,cc)=>{const x=get(sheet,rr,cc);return x.t!=='f'&&(x.v===''||x.v===undefined)?BLANK:calculate(w,sheet,rr,cc,stack,cache);};
+    // A range gives the values of its cells row by row, with the range itself (for the implicit intersection).
+    const ref=(a,b)=>{const [rr,cc]=coord(a);if(rr>=sheet.rows||cc>=sheet.cols)return '#REF!';if(!b)return read(rr,cc);const q=range(a+':'+b),v=[];if(q.r2>=sheet.rows||q.c2>=sheet.cols)return '#REF!';each(q,(r1,c1)=>v.push(read(r1,c1)));v.range=q;return v;};
+    const formulaAt=(rr,cc)=>{const x=get(sheet,rr,cc);return x.t==='f'?x.f:null;};
+    try {value=F.evalFormula(cell.f,ref,false,{row:r,col:c,formulaAt});}
     catch(e){value=isErr(e.message)?e.message:'#VALUE!';}
     stack.delete(key); if(typeof value==='number'&&!Number.isFinite(value))value='#NUM!';cache.set(key,value); return value;
   }
-  // parseOnly: only read the formula, without evaluating it. It throws when the formula cannot be read at all.
-  // at: [row, column] of the cell that holds the formula, which a range used as one value needs (single).
-  function evalFormula(formula, ref, parseOnly=false, at=null) {
-    const pattern=/\s*(?:(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+)|("(?:[^"]|"")*")|(\$?[A-Z]{1,3}\$?[1-9]\d*)|([A-Z_][A-Z_0-9.]*)|(<=|>=|<>|[+\-*/^%&=<>(),:])|(#REF!))/iy;
-    const tok=[];let p=1,m;while(p<formula.length){if(!formula.slice(p).trim())break;pattern.lastIndex=p;m=pattern.exec(formula);if(!m)throw Error('#NAME?');tok.push(m[1]?{k:'num',v:+m[1]}:m[2]?{k:'str',v:m[2].slice(1,-1).replace(/""/g,'"')}:m[3]?{k:'ref',v:m[3].toUpperCase()}:m[4]?{k:'id',v:m[4].toUpperCase()}:{k:m[5]||m[6],v:m[5]||m[6]});p=pattern.lastIndex;}
-    let i=0;const peek=()=>tok[i]?.k, eat=k=>{if(peek()!==k)throw Error('#VALUE!');return tok[i++];};
-    const number=v=>{if(isErr(v))throw Error(v);if(v===''||v===false)return 0;if(v===true)return 1;if(typeof v!=='number')throw Error('#VALUE!');return v;};
-    const prec={'=':1,'<>':1,'<':1,'>':1,'<=':1,'>=':1,'&':2,'+':3,'-':3,'*':4,'/':4,'^':5};
-    function expression(min=0){let left;
-      if(peek()==='+'||peek()==='-'){const sign=tok[i++].k;left={op:'unary',sign,x:expression(5)};}
-      else if(peek()==='('){i++;left=expression();eat(')');}
-      else if(peek()==='num'||peek()==='str'){left={op:'literal',v:tok[i++].v};}
-      else if(peek()==='#REF!'){i++;left={op:'literal',v:'#REF!'};}
-      else if(peek()==='ref'){const a=tok[i++].v;let b;if(peek()===':'){i++;b=eat('ref').v;}left={op:'ref',a,b};}
-      else if(peek()==='id'){const name=tok[i++].v;if(['TRUE','FALSE'].includes(name)&&peek()!=='(')left={op:'literal',v:name==='TRUE'};else {eat('(');const args=[];
-        const arg=()=>EMPTY_ARGS.includes(name)&&(peek()===','||peek()===')')?{op:'missing'}:expression();
-        if(peek()!==')'){args.push(arg());while(peek()===','){i++;args.push(arg());}}eat(')');left={op:'call',name,args};}}
-      else throw Error('#VALUE!');
-      while(true){if(peek()==='%'){i++;left={op:'percent',x:left};continue;}const op=peek(),pr=prec[op];if(pr===undefined||pr<min)break;i++;left={op:'binary',sign:op,l:left,r:expression(pr+(op==='^'?0:1))};} return left;
-    }
-    // A value as the text that & and the joining functions put in (errors are thrown before). An overflowed number is #NUM!.
-    const text=v=>{if(typeof v==='number'){if(!Number.isFinite(v))throw Error('#NUM!');return numberText(v);}return v===true?'TRUE':v===false?'FALSE':String(v);};
-    // A range used where one value is taken (by & and CONCATENATE, and as the ignore_empty of TEXTJOIN) gives, as in Excel,
-    // its cell in the row of the formula (a range in one column) or in its column (a range in one row): the implicit
-    // intersection. A range across rows and columns, or one that the row or column of the formula misses, is #VALUE!.
-    const single=v=>{
-      if(!Array.isArray(v))return v;
-      const q=v.range;if(!q||!at)throw Error('#VALUE!');
-      const r=q.r1===q.r2?q.r1:at[0]>=q.r1&&at[0]<=q.r2?at[0]:-1,c=q.c1===q.c2?q.c1:at[1]>=q.c1&&at[1]<=q.c2?at[1]:-1;
-      if(r<0||c<0)throw Error('#VALUE!');
-      return v[(r-q.r1)*(q.c2-q.c1+1)+c-q.c1];
-    };
-    // The texts of an argument (every cell of a range, row by row), in order: the first error among them is thrown.
-    const texts=node=>[run(node)].flat().map(v=>{if(isErr(v))throw Error(v);return text(v);});
-    // CONCATENATE, CONCAT and TEXTJOIN read their arguments themselves, as Excel does, errors included. CONCATENATE takes each
-    // argument as one value, in order. CONCAT and TEXTJOIN read a reference given to a text or to the delimiter only after
-    // all the arguments (now, then later), so that an error given directly comes before an error in a referenced cell:
-    // =CONCAT(E1,NA()) is #N/A though E1 holds #DIV/0! (desktop Excel 16.0). The ignore_empty of TEXTJOIN is read in its turn.
-    const now=node=>node.op==='ref'?null:texts(node),later=(node,v)=>v??texts(node);
-    function join(n){
-      const args=n.args;
-      if(n.name==='CONCATENATE'){
-        if(!args.length)throw Error('#VALUE!');
-        let out='';for(const node of args){const v=single(run(node));if(isErr(v))throw Error(v);out+=text(v);}
-        return out.slice(0,MAX_TEXT);
-      }
-      if(n.name==='CONCAT'){
-        if(!args.length)throw Error('#VALUE!');
-        const out=args.map(now).flatMap((v,i)=>later(args[i],v)).join('');if(out.length>MAX_TEXT)throw Error('#VALUE!');return out;
-      }
-      // TEXTJOIN(delimiter, ignore_empty, text1, ...)
-      if(args.length<3)throw Error('#VALUE!');
-      const [d,ignore,...items]=args;let delims=now(d);
-      let skip=true;
-      if(ignore.op!=='missing'){
-        // An empty cell is FALSE, the text "" is not TRUE or FALSE (Excel shows #VALUE!).
-        if(ignore.op==='literal'&&ignore.v==='')throw Error('#VALUE!');
-        const v=single(run(ignore));if(isErr(v))throw Error(v);
-        if(typeof v==='boolean')skip=v;else if(typeof v==='number')skip=v!==0;else if(v==='')skip=false;
-        else if(/^(?:true|false)$/i.test(v))skip=/^true$/i.test(v);else throw Error('#VALUE!');
-      }
-      // The next delimiter is taken only when a text is put in. Excel counts it in front of an empty text before it leaves
-      // the text out, so such a text can still make the result too long.
-      const parts=items.map(now);delims=later(d,delims);
-      let out='',count=0;
-      for(const t of parts.flatMap((v,i)=>later(items[i],v))){
-        if(count){const sep=delims[(count-1)%delims.length];if(out.length+sep.length+t.length>MAX_TEXT)throw Error('#VALUE!');if(skip&&t==='')continue;out+=sep+t;count++;}
-        else if(!skip||t!==''){if(t.length>MAX_TEXT)throw Error('#VALUE!');out=t;count=1;}
-      }
-      return out;
-    }
-    function run(n){
-      if(n.op==='literal')return n.v;if(n.op==='ref')return ref(n.a,n.b);if(n.op==='missing')return '';
-      if(n.op==='unary')return number(run(n.x))*(n.sign==='-'?-1:1);if(n.op==='percent')return number(run(n.x))/100;
-      // The left operand is looked at first: its error is the result even when the right one has an error too, as in Excel.
-      if(n.op==='binary'){const one=x=>{if(n.sign==='&')x=single(x);if(isErr(x))throw Error(x);return x;},a=one(run(n.l)),b=one(run(n.r));const aa=typeof a==='string'?a.toLowerCase():a,bb=typeof b==='string'?b.toLowerCase():b;switch(n.sign){case '&':return (text(a)+text(b)).slice(0,MAX_TEXT);case '=':return aa===bb;case '<>':return aa!==bb;case '<':return aa<bb;case '>':return aa>bb;case '<=':return aa<=bb;case '>=':return aa>=bb;case '+':return number(a)+number(b);case '-':return number(a)-number(b);case '*':return number(a)*number(b);case '/':if(number(b)===0)throw Error('#DIV/0!');return number(a)/number(b);case '^':return number(a)**number(b);}}
-      // A function outside FUNCTIONS is #NAME?; an error in its arguments comes first, as Excel shows for VLOOKUP(1/0,...).
-      if(!FUNCTIONS.includes(n.name)){for(const v of n.args.map(run).flat())if(isErr(v))throw Error(v);throw Error('#NAME?');}
-      if(n.name==='IF'){if(n.args.length<2||n.args.length>3)throw Error('#VALUE!');const condition=run(n.args[0]);if(isErr(condition))throw Error(condition);return condition?run(n.args[1]):n.args[2]?run(n.args[2]):false;}
-      if(n.name==='IFERROR'){if(n.args.length!==2)throw Error('#VALUE!');let v;try{v=run(n.args[0]);}catch(e){if(isErr(e.message))return run(n.args[1]);throw e;}return isErr(v)||Array.isArray(v)?run(n.args[1]):v;}
-      if(['CONCATENATE','CONCAT','TEXTJOIN'].includes(n.name))return join(n);
-      const args=n.args.map(run).flat();for(const v of args)if(isErr(v))throw Error(v);const nums=args.filter(x=>typeof x==='number');
-      switch(n.name){case 'SUM':return nums.reduce((a,b)=>a+b,0);case 'AVERAGE':if(!nums.length)throw Error('#DIV/0!');return nums.reduce((a,b)=>a+b,0)/nums.length;case 'MIN':return nums.length?Math.min(...nums):0;case 'MAX':return nums.length?Math.max(...nums):0;case 'COUNT':return nums.length;case 'COUNTA':return args.filter(x=>x!=='').length;case 'ROUNDDOWN':case 'ROUNDUP':{if(args.length!==2)throw Error('#VALUE!');const x=number(args[0]),f=10**Math.trunc(number(args[1])),a=+(Math.abs(x)*f).toPrecision(15);return Math.sign(x)*(n.name==='ROUNDUP'?Math.ceil(a):Math.floor(a))/f;}case 'INT':if(args.length!==1)throw Error('#VALUE!');return Math.floor(+number(args[0]).toPrecision(15));case 'ABS':if(args.length!==1)throw Error('#VALUE!');return Math.abs(number(args[0]));case 'MOD':{if(args.length!==2)throw Error('#VALUE!');const a=number(args[0]),b=number(args[1]);if(b===0)throw Error('#DIV/0!');return a-b*Math.floor(a/b);}case 'AND':case 'OR':{const v=args.filter(x=>typeof x!=='string').map(x=>!!number(x));if(!v.length)throw Error('#VALUE!');return n.name==='AND'?v.every(Boolean):v.some(Boolean);}case 'NOT':if(args.length!==1)throw Error('#VALUE!');return !number(args[0]);case 'ROUND':if(args.length!==2)throw Error('#VALUE!');return Math.sign(number(args[0]))*Math.round((Math.abs(args[0])+Number.EPSILON)*10**number(args[1]))/10**args[1];default:throw Error('#NAME?');}
-    }
-    const ast=expression();if(i!==tok.length)throw Error('#NAME?');if(parseOnly)return ast;const result=run(ast);return Array.isArray(result)?'#VALUE!':result;
-  }
+  const evalFormula=F.evalFormula;
   function display(value,fmt='General') {
     if(isErr(value)||typeof value==='string')return value;if(typeof value==='boolean')return value?'TRUE':'FALSE';
-    if(value==null)return ''; if(fmt==='yyyy/mm/dd'){const d=new Date(Date.UTC(1899,11,30)+value*86400000);return isNaN(d)?'#VALUE!':d.toISOString().slice(0,10).replace(/-/g,'/');}
+    if(value==null)return ''; if(fmt==='yyyy/mm/dd'){try{return F.formatValue(value,'yyyy/mm/dd');}catch(e){return '#VALUE!';}}
     if(fmt==='General'||fmt==='@')return String(Number(value.toPrecision(15)));
     const percent=fmt.includes('%'),decimals=fmt.includes('.00')?2:0;
     const yen=fmt.startsWith('¥'),neg=yen&&value<0;
@@ -322,7 +217,7 @@
   // copied range's top-left. Returns null when any reference points outside the copied range.
   function blockFormula(f,q) {
     let outside=false;
-    const out=f.replace(/"(?:[^"]|"")*"|\$?[A-Z]{1,3}\$?[1-9]\d*(?![A-Z0-9_(])/gi,m=>{if(m[0]==='"')return m;const p=/^(\$?)([A-Z]+)(\$?)(\d+)$/i.exec(m),[r,c]=coord(m);if(!within(r,c,q)){outside=true;return m;}return p[1]+colName(c-q.c1)+p[3]+(r-q.r1+1);});
+    const out=F.englishNames(f).replace(/"(?:[^"]|"")*"|\$?[A-Z]{1,3}\$?[1-9]\d*(?![A-Z0-9_(])/gi,m=>{if(m[0]==='"')return m;const p=/^(\$?)([A-Z]+)(\$?)(\d+)$/i.exec(m),[r,c]=coord(m);if(!within(r,c,q)){outside=true;return m;}return p[1]+colName(c-q.c1)+p[3]+(r-q.r1+1);});
     return outside?null:out;
   }
   const attr=v=>esc(v).replace(/\n/g,'&#10;').replace(/\r/g,'&#13;').replace(/\t/g,'&#9;');

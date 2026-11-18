@@ -87,15 +87,55 @@ const FORMAT_IN_EXCEL = {'General': [0, 1234.5], '@': [49, '00123'], '0': [1, 12
   '0%': [9, 0.125], '0.00%': [10, 0.125], '¥#,##0': ['"¥"#,##0', 30000], 'yyyy/mm/dd': ['yyyy/mm/dd', 46023]};
 const BORDER_IN_EXCEL = {'0.5px solid': 'hair', '1px solid': 'thin', '2px solid': 'medium', '3px solid': 'thick', '1px dashed': 'dashed',
   '2px dashed': 'mediumDashed', '1px dotted': 'dotted', '3px double': 'double'};
-// A formula with each function, and its value (the page's, which desktop Excel 16.0 gives too); a third item is the formula as
-// Excel stores it in the file where it differs (Excel saves the functions it added in 2010 and later, such as CONCAT and
-// TEXTJOIN of Excel 2016, with _xlfn. before their names).
-const FUNCTION_IN_EXCEL = {SUM: ['=SUM(1,2,3)', 6], AVERAGE: ['=AVERAGE(2,4)', 3], MIN: ['=MIN(5,2,9)', 2], MAX: ['=MAX(5,2,9)', 9],
-  COUNT: ['=COUNT(1,2,"a")', 2], COUNTA: ['=COUNTA(1,"a")', 2], IF: ['=IF(TRUE,1,2)', 1], IFERROR: ['=IFERROR(1/0,5)', 5],
-  AND: ['=AND(TRUE,FALSE)', false], OR: ['=OR(FALSE,TRUE)', true], NOT: ['=NOT(FALSE)', true], ROUND: ['=ROUND(1.25,1)', 1.3],
-  ROUNDDOWN: ['=ROUNDDOWN(1.29,1)', 1.2], ROUNDUP: ['=ROUNDUP(1.21,1)', 1.3], INT: ['=INT(-1.5)', -2], ABS: ['=ABS(-3)', 3], MOD: ['=MOD(7,4)', 3],
+// A formula with each function, and its value (the page's, which desktop Excel 16.0 gives too: each was computed there on
+// the cells of FUNCTION_DATA); a third item is the formula as Excel stores it in the file where it differs (Excel saves the
+// functions it added in 2010 and later, such as CONCAT and TEXTJOIN of Excel 2016, with _xlfn. before their names).
+const FUNCTION_DATA = {B1: 1, B2: 2, B3: 3, C1: 10, C2: 20, C3: 30, E1: 'a', F1: 'b', G1: 'c', E2: 1, F2: 2, G2: 3};
+const dataCells = () => Object.fromEntries(Object.entries(FUNCTION_DATA).map(([a, v]) => [a, typeof v === 'number' ? {t: 'n', v} : {t: 's', v}]));
+const FUNCTION_IN_EXCEL = {IF: ['=IF(TRUE,1,2)', 1], IFS: ['=IFS(1>2,"a",2>1,"b")', 'b', '_xlfn.IFS(1>2,"a",2>1,"b")'],
+  IFERROR: ['=IFERROR(1/0,5)', 5], IFNA: ['=IFNA(NA(),"なし")', 'なし', '_xlfn.IFNA(NA(),"なし")'], AND: ['=AND(TRUE,FALSE)', false],
+  OR: ['=OR(FALSE,TRUE)', true], XOR: ['=XOR(TRUE,FALSE,TRUE)', false, '_xlfn.XOR(TRUE,FALSE,TRUE)'], NOT: ['=NOT(FALSE)', true],
+  TRUE: ['=TRUE()', true], FALSE: ['=FALSE()', false], NA: ['=ISNA(NA())', true],
+  SWITCH: ['=SWITCH(2,1,"一",2,"二","他")', '二', '_xlfn.SWITCH(2,1,"一",2,"二","他")'], CHOOSE: ['=CHOOSE(2,"a","b","c")', 'b'],
+  ISBLANK: ['=ISBLANK(D1)', true], ISNUMBER: ['=ISNUMBER(1.5)', true], ISTEXT: ['=ISTEXT("a")', true], ISNONTEXT: ['=ISNONTEXT(1)', true],
+  ISLOGICAL: ['=ISLOGICAL(FALSE)', true], ISERROR: ['=ISERROR(1/0)', true], ISERR: ['=ISERR(NA())', false], ISNA: ['=ISNA(1)', false],
+  ISEVEN: ['=ISEVEN(-3)', false], ISODD: ['=ISODD(2.5)', false], N: ['=N(TRUE)', 1], T: ['=T("a")&T(1)', 'a'], SUM: ['=SUM(1,2,3)', 6],
+  PRODUCT: ['=PRODUCT(2,3,4)', 24], ROUND: ['=ROUND(1.25,1)', 1.3], ROUNDUP: ['=ROUNDUP(1.21,1)', 1.3], ROUNDDOWN: ['=ROUNDDOWN(1.29,1)', 1.2],
+  TRUNC: ['=TRUNC(-1.59,1)', -1.5], INT: ['=INT(-1.5)', -2], ABS: ['=ABS(-3)', 3], MOD: ['=MOD(7,4)', 3], QUOTIENT: ['=QUOTIENT(7,2)', 3],
+  SIGN: ['=SIGN(-2)', -1], SQRT: ['=SQRT(16)', 4], POWER: ['=POWER(2,10)', 1024], EXP: ['=EXP(0)', 1], LN: ['=LN(1)', 0], 'LOG10': ['=LOG10(1000)', 3],
+  LOG: ['=LOG(8,2)', 3], PI: ['=ROUND(PI(),4)', 3.1416], CEILING: ['=CEILING(2.1,0.5)', 2.5], FLOOR: ['=FLOOR(2.9,0.5)', 2.5],
+  'CEILING.MATH': ['=CEILING.MATH(-2.5)', -2, '_xlfn.CEILING.MATH(-2.5)'], 'FLOOR.MATH': ['=FLOOR.MATH(-2.5)', -3, '_xlfn.FLOOR.MATH(-2.5)'],
+  MROUND: ['=MROUND(10,3)', 9], SUMPRODUCT: ['=SUMPRODUCT(B1:B3,C1:C3)', 140], AVERAGE: ['=AVERAGE(2,4)', 3], MIN: ['=MIN(5,2,9)', 2],
+  MAX: ['=MAX(5,2,9)', 9], COUNT: ['=COUNT(1,2,"a")', 2], COUNTA: ['=COUNTA(1,"a")', 2], COUNTBLANK: ['=COUNTBLANK(B1:D3)', 3],
+  MEDIAN: ['=MEDIAN(3,1,2,10)', 2.5], MODE: ['=MODE(1,2,2,3)', 2], 'MODE.SNGL': ['=MODE.SNGL(1,2,2,3)', 2, '_xlfn.MODE.SNGL(1,2,2,3)'],
+  LARGE: ['=LARGE(B1:B3,2)', 2], SMALL: ['=SMALL(B1:B3,1)', 1], RANK: ['=RANK(2,B1:B3)', 2],
+  'RANK.EQ': ['=RANK.EQ(3,B1:B3,1)', 3, '_xlfn.RANK.EQ(3,B1:B3,1)'], STDEV: ['=STDEV(2,4,6)', 2],
+  'STDEV.S': ['=STDEV.S(2,4,6)', 2, '_xlfn.STDEV.S(2,4,6)'], STDEVP: ['=STDEVP(1,3)', 1], 'STDEV.P': ['=STDEV.P(1,3)', 1, '_xlfn.STDEV.P(1,3)'],
+  VAR: ['=VAR(2,4,6)', 4], 'VAR.S': ['=VAR.S(2,4,6)', 4, '_xlfn.VAR.S(2,4,6)'], VARP: ['=VARP(1,3)', 1],
+  'VAR.P': ['=VAR.P(1,3)', 1, '_xlfn.VAR.P(1,3)'], SUBTOTAL: ['=SUBTOTAL(9,B1:B3)', 6], COUNTIF: ['=COUNTIF(B1:B3,">1")', 2],
+  COUNTIFS: ['=COUNTIFS(B1:B3,">1",C1:C3,"<30")', 1], SUMIF: ['=SUMIF(B1:B3,">1",C1:C3)', 50], AVERAGEIF: ['=AVERAGEIF(B1:B3,">1",C1:C3)', 25],
+  SUMIFS: ['=SUMIFS(C1:C3,B1:B3,">=2")', 50], AVERAGEIFS: ['=AVERAGEIFS(C1:C3,B1:B3,"<3")', 15],
+  MAXIFS: ['=MAXIFS(C1:C3,B1:B3,"<3")', 20, '_xlfn.MAXIFS(C1:C3,B1:B3,"<3")'],
+  MINIFS: ['=MINIFS(C1:C3,B1:B3,">1")', 20, '_xlfn.MINIFS(C1:C3,B1:B3,">1")'], VLOOKUP: ['=VLOOKUP(2,B1:C3,2,FALSE)', 20],
+  HLOOKUP: ['=HLOOKUP("b",E1:G2,2,FALSE)', 2], MATCH: ['=MATCH(3,B1:B3,0)', 3], INDEX: ['=INDEX(C1:C3,2)', 20],
+  XLOOKUP: ['=XLOOKUP(3,B1:B3,C1:C3)', 30, '_xlfn.XLOOKUP(3,B1:B3,C1:C3)'], XMATCH: ['=XMATCH(2,B1:B3)', 2, '_xlfn.XMATCH(2,B1:B3)'],
+  LOOKUP: ['=LOOKUP(2.5,B1:B3,C1:C3)', 20], ROW: ['=ROW(C5)', 5], COLUMN: ['=COLUMN(C5)', 3], ROWS: ['=ROWS(B1:C4)', 4],
+  COLUMNS: ['=COLUMNS(B1:C4)', 2], LEN: ['=LEN("Excel 関数")', 8], LEFT: ['=LEFT("Excel",2)', 'Ex'], RIGHT: ['=RIGHT("Excel",3)', 'cel'],
+  MID: ['=MID("Excel",2,3)', 'xce'], FIND: ['=FIND("c","Excel")', 3], SEARCH: ['=SEARCH("C?L","Excel")', 3],
+  SUBSTITUTE: ['=SUBSTITUTE("a-b-c","-","+",2)', 'a-b+c'], REPLACE: ['=REPLACE("abcdef",2,3,"X")', 'aXef'], TRIM: ['=TRIM("  a   b  ")', 'a b'],
+  CLEAN: ['=CLEAN("a"&CHAR(10)&"b")', 'ab'], UPPER: ['=UPPER("abc")', 'ABC'], LOWER: ['=LOWER("ABC")', 'abc'],
+  PROPER: ['=PROPER("hello world")', 'Hello World'], REPT: ['=REPT("ab",3)', 'ababab'], EXACT: ['=EXACT("a","A")', false], CHAR: ['=CHAR(65)', 'A'],
+  CODE: ['=CODE("A")', 65], UNICHAR: ['=UNICHAR(9731)', '☃', '_xlfn.UNICHAR(9731)'], UNICODE: ['=UNICODE("あ")', 12354, '_xlfn.UNICODE("あ")'],
+  ASC: ['=ASC("ＡＢＣ")', 'ABC'], DBCS: ['=DBCS("ABC")', 'ＡＢＣ'], VALUE: ['=VALUE("1,234")', 1234], TEXT: ['=TEXT(46024,"yyyy年m月d日")', '2026年1月2日'],
   CONCATENATE: ['=CONCATENATE("a",1/4,TRUE)', 'a0.25TRUE'], CONCAT: ['=CONCAT("a",1/3)', 'a0.333333333333333', '_xlfn.CONCAT("a",1/3)'],
-  TEXTJOIN: ['=TEXTJOIN("-",TRUE,"a","","b")', 'a-b', '_xlfn.TEXTJOIN("-",TRUE,"a","","b")']};
+  TEXTJOIN: ['=TEXTJOIN("-",TRUE,"a","","b")', 'a-b', '_xlfn.TEXTJOIN("-",TRUE,"a","","b")'], DATE: ['=DATE(2026,1,2)', 46024],
+  YEAR: ['=YEAR(46024)', 2026], MONTH: ['=MONTH(46024)', 1], DAY: ['=DAY(46024)', 2], WEEKDAY: ['=WEEKDAY(46024)', 6], WEEKNUM: ['=WEEKNUM(46024)', 1],
+  ISOWEEKNUM: ['=ISOWEEKNUM(46024)', 1, '_xlfn.ISOWEEKNUM(46024)'], EDATE: ['=EDATE(46053,1)', 46081], EOMONTH: ['=EOMONTH(46024,0)', 46053],
+  DATEDIF: ['=DATEDIF(DATE(2020,1,15),DATE(2026,1,14),"Y")', 5], DAYS: ['=DAYS(46053,46024)', 29, '_xlfn.DAYS(46053,46024)'],
+  NETWORKDAYS: ['=NETWORKDAYS(46024,46031)', 6], 'NETWORKDAYS.INTL': ['=NETWORKDAYS.INTL(46024,46031,11)', 7], WORKDAY: ['=WORKDAY(46024,1)', 46027],
+  'WORKDAY.INTL': ['=WORKDAY.INTL(46024,1,11)', 46025], TIME: ['=TIME(12,0,0)', 0.5], HOUR: ['=HOUR(0.75)', 18], MINUTE: ['=MINUTE("12:34")', 34],
+  SECOND: ['=SECOND("12:34:56")', 56], DATEVALUE: ['=DATEVALUE("2026/1/2")', 46024], TIMEVALUE: ['=TIMEVALUE("18:00")', 0.75],
+  TODAY: ['=TODAY()>DATE(2000,1,1)', true], NOW: ['=NOW()-TODAY()<1', true]};
 const TYPE_IN_EXCEL = {boolean: 'b', number: 'n', string: 'str'};
 
 /** A font flag: the cell with it, and a cell without it. */
@@ -179,9 +219,14 @@ const SAMPLES = [
     back: w => assert.deepEqual(w.sheets[0].cells.A1, {t: 's', v: 'サイト', link: 'https://example.com/a?b=1&c=2', s: {underline: true, color: '#0563c1'}})},
   ...Object.entries(FUNCTION_IN_EXCEL).map(([name, [f, value, stored = f.slice(1)]]) => ({
     name: '関数 ' + name, covers: ['function.' + name],
-    book: () => bookOf({A1: {t: 'f', f}}),
+    book: () => bookOf({A1: {t: 'f', f}, ...dataCells()}),
     excel: x => assert.deepEqual({formula: cellOf(x, 'A1').formula, ...valueOf(x, 'A1')}, {formula: stored, type: TYPE_IN_EXCEL[typeof value], value}),
   })),
+  // The Japanese Excel names DBCS JIS, and the page takes either name; the file has DBCS, the name every Excel reads.
+  {name: '関数 JIS（DBCS の日本語の名前）', covers: [],
+    book: () => bookOf({A1: {t: 'f', f: '=JIS("ABC")&jis("1")'}}),
+    excel: x => assert.deepEqual({formula: cellOf(x, 'A1').formula, ...valueOf(x, 'A1')}, {formula: 'DBCS("ABC")&DBCS("1")', type: 'str', value: 'ＡＢＣ１'}),
+    back: w => assert.deepEqual(w.sheets[0].cells.A1, {t: 'f', f: '=DBCS("ABC")&DBCS("1")'})},
   // The ids and the revision let the page match an edit state to its book; Excel has nothing like them. They are not
   // written, and a book read from xlsx gets new ones (from the file's name and contents).
   {name: 'ブックとシートと画像のID（xlsxに書かない）', covers: ['book.schema', 'book.id', 'book.revision', 'sheet.id', 'image.id', 'image.asset'],

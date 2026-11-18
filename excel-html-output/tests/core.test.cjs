@@ -105,10 +105,16 @@ test('the formulas compute the functions in FUNCTIONS, and no other',()=>{
   without(C.FUNCTIONS,'IF',()=>assert.equal(result('=IF(TRUE,1,2)'),'#NAME?','IF too, though its arguments are computed lazily'));
   for(const [name,f] of [['CONCATENATE','=CONCATENATE("a")'],['CONCAT','=CONCAT("a")'],['TEXTJOIN','=TEXTJOIN(",",TRUE,"a")']])
     without(C.FUNCTIONS,name,()=>assert.equal(result(f),'#NAME?',name+' too, though it reads its arguments itself'));
-  assert.equal(result('=VLOOKUP(1,A1:B2,2)'),'#NAME?','a function the page does not compute');
-  assert.equal(result('=VLOOKUP(1/0,A1:B2,2)'),'#DIV/0!','an error in an argument still comes first, as Excel shows it for VLOOKUP (desktop Excel 16.0)');});
-test('a name Excel does not know is #NAME? even when an argument is an error',{todo:'the page does not know which names Excel knows: =FOO(1/0) shows #DIV/0!, while desktop Excel 16.0 shows #NAME?'},()=>{
+  assert.equal(result('=SUMSQ(1,2)'),'#NAME?','a function the page does not compute');
+  assert.equal(result('=SUMSQ(1/0)'),'#NAME?','whatever its arguments are (Excel, which knows SUMSQ, shows #DIV/0!)');});
+test('a name Excel does not know is #NAME? even when an argument is an error',()=>{
   assert.equal(result('=FOO(1/0)'),'#NAME?');});
+// Desktop Excel 16.0 keeps 15 significant digits of a number written in a formula and cuts the rest off: it saves
+// =INT(2.9999999999999996) as INT(2.99999999999999), whose value is 2 (tests/fixtures/excel-functions.xlsx, 数学!H117).
+test('a number written in a formula is read to 15 significant digits, the rest cut off, as Excel reads it',()=>{
+  for(const [f,want] of [['=INT(2.9999999999999996)',2],['=TRUNC(-2.0000000000000004)',-2],['=HOUR(0.5213541666666667)',12],['=123456789012345678',123456789012345000],
+    ['=0.30000000000000004=0.3',true],['=1.0000000000000002',1],['=.5',0.5],['=1E+20',1e20],['=1.234567890123456789E-5',0.0000123456789012345]])
+    assert.equal(result(f),want,f);});
 test('a number aligned general with an indent is shown aligned left, as Excel aligns a general cell it indents',{todo:'the screen (css) aligns the number right and indents it from the right, while the clipboard (xlCss) and the xlsx write it aligned left; only a book JSON holds this, since the ribbon has no indent button'},()=>{
   assert.match(C.css({...C.DEFAULT,indent:2},5),/text-align:left/);});
 test('validate takes only the values in CHOICES and CELL_TYPES',()=>{const w=make(),s=w.sheets[0];
@@ -150,7 +156,8 @@ const check=(cases,cells)=>{for(const [f,want] of cases)assert.equal(on(f,'H40',
 test('& joins TRUE and FALSE, numbers and empty cells as Excel writes them',()=>check([['="a"&"b"','ab'],['=A1&B1','ab'],['=A2&"x"','x'],['=A3&"x"','1x'],
   ['=A4&"x"','TRUEx'],['=TRUE&""','TRUE'],['=FALSE&1','FALSE1'],['=(1=1)&""','TRUE'],['=1&2','12'],['="1"&2+1','13'],['="a"&-1','a-1'],['=50%&""','0.5'],
   ['=0.1+0.2&""','0.3'],['=A5&"x"','x'],['=A7&""','0.125'],['=A8&""','46023'],['=A9&"|"',' sp |'],['=SUM(1,2)&"件"','3件']]));
-test('a text that reads as a number is a number in arithmetic, as in Excel (="1"&"2"+1 is 13)',{todo:'the page takes only numbers, TRUE, FALSE and empty cells in arithmetic, so "2"+1 is #VALUE!'},()=>check([['="1"&"2"+1','13']]));
+test('a text that reads as a number is a number in arithmetic, as in Excel (="1"&"2"+1 is 13)',()=>check([['="1"&"2"+1','13'],['="2"*"3"',6],['=" 1,000 "+1',1001],
+  ['="abc"+1','#VALUE!'],['=""+1','#VALUE!'],['="2026/1/2"+0',46024],['="12:00"*2',1]]));
 test('every operator shows the error of its left operand first, as Excel does (=A6+1/0 is #N/A)',()=>check([['=A6&"x"','#N/A'],['=1/0&A6','#DIV/0!'],
   ['=A6&1/0','#N/A'],['=A6+1/0','#N/A'],['=1/0+A6','#DIV/0!'],['=A6*1/0','#N/A'],['=A6-1/0','#N/A'],['=A6^(1/0)','#N/A'],['=A6=1/0','#N/A'],['=A6<1/0','#N/A']]));
 test('a range used as one value, with & or in CONCATENATE, gives its cell in the row or column of the formula (implicit intersection), as Excel does',()=>{
@@ -159,7 +166,8 @@ test('a range used as one value, with & or in CONCATENATE, gives its cell in the
     ['A22','=CONCATENATE(A1:B1)','a'],['B23','=CONCATENATE(A1:B1)','b'],['B24','="<"&A1:B1','<b'],['A26','=A1:A1&"x"','ax'],['B26','=CONCATENATE(B2:B2)','c'],
     ['E2','=A1:B2&"x"','#VALUE!'],['A40','=A1:B2&"x"','#VALUE!'],['E1','=CONCATENATE(A1:B2)','#VALUE!']])
     assert.equal(on(f,where),want,where+' '+f);
-  assert.throws(()=>C.evalFormula('=CONCATENATE(A1:A3)',()=>[1,2,3]),/#VALUE!/,'without the cell of the formula, a range is no one value');});
+  const range=()=>Object.assign([1,2,3],{range:{r1:0,c1:0,r2:2,c2:0}});
+  assert.throws(()=>C.evalFormula('=CONCATENATE(A1:A3)',range),/#VALUE!/,'without the cell of the formula, a range is no one value');});
 test('CONCATENATE joins its arguments in order, each one value, and shows the first error',()=>check([['=CONCATENATE("a","b",1,TRUE)','ab1TRUE'],
   ['=CONCATENATE(A1)','a'],['=CONCATENATE(A2)',''],['=CONCATENATE(1/3)','0.333333333333333'],['=CONCATENATE(A7,A8)','0.12546023'],['=CONCATENATE(A6,"x")','#N/A'],
   ['=CONCATENATE("x",1/0,A6)','#DIV/0!'],
@@ -196,15 +204,16 @@ test('CONCAT and TEXTJOIN read a referenced cell after their other arguments, as
   ['=TEXTJOIN(A6,TRUE,1/0)','#DIV/0!'],['=TEXTJOIN(A6,TRUE,E1)','#N/A'],['=TEXTJOIN(A6,1/0,"a")','#DIV/0!'],['=TEXTJOIN(",",TRUE,A6,1/0)','#DIV/0!'],
   ['=TEXTJOIN(1/0,TRUE,A6)','#DIV/0!'],['=TEXTJOIN(",",1/0,A6)','#DIV/0!'],['=TEXTJOIN(",","x",1/0)','#VALUE!'],['=TEXTJOIN(",","x",A6)','#VALUE!'],
   ['=TEXTJOIN(A6,"x","a")','#VALUE!'],['=TEXTJOIN(E1,A6,"a")','#N/A'],['=CONCATENATE(A6,1/0)','#N/A'],['=A6&1/0','#N/A']],{...SHEET,E1:{t:'f',f:'=1/0'}}));
-test('a cell whose formula gives "" is no empty cell for the ignore_empty of TEXTJOIN: Excel shows #VALUE!',{todo:'the page holds an empty cell and a formula that gives "" alike (both are ""), so =TEXTJOIN(",",A5,"a","","b") reads A5 as an empty cell, FALSE, and shows a,,b'},()=>{
-  assert.equal(on('=TEXTJOIN(",",A5,"a","","b")'),'#VALUE!');});
+test('a cell whose formula gives "" is no empty cell for the ignore_empty of TEXTJOIN: Excel shows #VALUE!',()=>{
+  assert.equal(on('=TEXTJOIN(",",A5,"a","","b")'),'#VALUE!');assert.equal(on('=TEXTJOIN(",",A2,"a","","b")'),'a,,b','an empty cell is FALSE');});
 test('an argument of CONCATENATE, CONCAT and TEXTJOIN may be left empty, as in Excel: it is empty text, and TRUE for the ignore_empty of TEXTJOIN',()=>{
   check([['=CONCATENATE("a",,"b")','ab'],['=CONCATENATE(,)',''],['=CONCATENATE("a",)','a'],['=CONCAT("a",,"b")','ab'],['=CONCAT("a",)','a'],['=TEXTJOIN(,TRUE,"a","b")','ab'],
     ['=TEXTJOIN(",",,"a","","b")','a,b'],['=TEXTJOIN(",",TRUE,"a",,"b")','a,b'],['=TEXTJOIN(",",FALSE,"a",,"b")','a,,b'],['=TEXTJOIN(",",FALSE,"a",)','a,'],
     ['=TEXTJOIN(",",TRUE,)',''],['=TEXTJOIN(,,A1:A3)','a1']]);
-  // Each of the other functions reads an empty argument in a way of its own in Excel, which the page does not compute, so it
-  // still does not read such a formula (an xlsx gets its text, and a formula read from xlsx becomes Excel's value).
-  for(const f of ['=SUM(1,,2)','=IF(TRUE,)','=ROUND(1.5,)'])assert.throws(()=>C.evalFormula(f,null,true),f);});
+  // Every function takes an argument left empty, each as Excel reads it (measured): mostly as an empty cell, 0 or "" by
+  // what the function wants; PRODUCT leaves it out and MODE refuses it.
+  check([['=SUM(1,,2)',3],['=IF(TRUE,)',0],['=IF(FALSE,1,)',0],['=ROUND(1.5,)',2],['=AVERAGE(1,)',0.5],['=COUNT(1,)',2],['=COUNTA(1,,"")',3],['=MAX(,-1)',0],
+    ['=PRODUCT(5,)',5],['=PRODUCT(2,,3)',6],['=MODE(,,1)','#VALUE!'],['=AND(,TRUE)',false],['=INDEX(A1:B2,,2)','#VALUE!']]);});
 test('& and CONCATENATE cut a text at 32767 characters, as Excel does; CONCAT and TEXTJOIN show #VALUE! for a longer text (desktop Excel 16.0 shows #CALC!)',()=>{
   const y=n=>'y'.repeat(n),cells={A3:{t:'n',v:1},A6:{t:'s',v:'#N/A'},A11:{t:'s',v:y(32767)},A12:{t:'s',v:y(32766)},A13:{t:'s',v:y(32765)}};
   check([['=A11&"b"',y(32767)],['=A12&"bc"',y(32766)+'b'],['=A12&"bc"&"d"',y(32766)+'b'],['=CONCATENATE(A12,"bc")',y(32766)+'b'],['=CONCATENATE(A11,A11)',y(32767)],

@@ -119,6 +119,7 @@ def build(workbook):
         "__TITLE__": html.escape(workbook["title"]),
         "/*__STYLE__*/": (ROOT / "assets" / "style.css").read_text(encoding="utf-8"),
         "/*__TOON__*/": (ROOT / "assets" / "toon.js").read_text(encoding="utf-8"),
+        "/*__FORMULAS__*/": (ROOT / "assets" / "formulas.js").read_text(encoding="utf-8"),
         "/*__CORE__*/": (ROOT / "assets" / "core.js").read_text(encoding="utf-8"),
         "/*__APP__*/": (ROOT / "assets" / "app.js").read_text(encoding="utf-8"),
         "/*__DATA__*/": data,

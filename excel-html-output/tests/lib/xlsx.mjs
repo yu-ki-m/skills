@@ -133,8 +133,10 @@ const ENTITY = {lt: '<', gt: '>', amp: '&', quot: '"', apos: "'"};
 const decode = text => text.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|amp|quot|apos);/gi,
   (_, e) => e[0] === '#' ? String.fromCodePoint(e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : +e.slice(1)) : ENTITY[e]);
 
-/** A small XML parser: elements as {name, attrs, children}, text as strings. No DTDs; comments and <?…?> are skipped. */
+/** A small XML parser: elements as {name, attrs, children}, text as strings. No DTDs; comments and <?…?> are skipped.
+    Line ends are made LF first, as an XML reader must: Excel writes the LF of a formula's text value as CR LF. */
 export function parseXml(text) {
+  text = text.replace(/\r\n?/g, '\n');
   const root = {name: '#root', attrs: {}, children: []}, stack = [root];
   const re = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/([^\s>]+)\s*>|<([^\s/>]+)((?:\s+[^\s=]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/g;
   let m;

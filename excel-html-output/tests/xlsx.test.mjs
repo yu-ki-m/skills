@@ -62,7 +62,7 @@ test('数式は数式のまま書き、HTMLが計算した値も一緒に入れ�
   assert.deepEqual(f('B6'), {formula: '$A$1+A$2', type: 'n', value: 5});
   assert.deepEqual(f('B7'), {formula: 'IF(A1=2,"はい","いいえ")', type: 'str', value: 'はい'});
   assert.deepEqual(f('B8'), {formula: '"total: "&A1', type: 'str', value: 'total: 2'});
-  assert.equal(s.cells.B9.formula, 'VLOOKUP(A1,A1:A2,1,FALSE)', 'HTMLで計算できない関数も、Excelでは計算できるので数式のまま書く');
+  assert.equal(s.cells.B9.formula, 'VLOOKUP(A1,A1:A2,1,FALSE)', '関数も数式のまま書く');
   assert.equal(s.cells.B9.style.numFmt, '#,##0');
   assert.equal(x.calc.fullCalcOnLoad, '1', 'Excelが開くときに全部の数式を計算し直す');
 });

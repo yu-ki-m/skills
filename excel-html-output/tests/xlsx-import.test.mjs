@@ -53,21 +53,23 @@ test('数式は、HTMLで計算できれば数式のまま、できなければE
   const result = fixture(), s = result.workbook.sheets[0];
   assert.deepEqual(['E4', 'E5', 'E6', 'E7', 'E8', 'E9'].map(a => s.cells[a].f), ['=C4*D4', '=C5*D5', '=C6*D6', '=SUM(E4:E6)', '=ROUNDDOWN(E7*0.1,0)', '=E7+E8'],
     'E5・E6 は共有数式（E4の式をずらしたもの）');
-  assert.deepEqual([s.cells.F4, s.cells.F5], [{t: 'n', v: 1200, s: {numFmt: '¥#,##0'}}, {t: 'n', v: 800}], 'VLOOKUP と別のシートの参照は値にする');
+  assert.deepEqual([s.cells.F4, s.cells.F5], [{t: 'n', v: 1200, s: {numFmt: '¥#,##0'}}, {t: 'n', v: 800}], '別のシートを参照する数式は値にする（VLOOKUP の表も、別のシートの列全体）');
   assert.ok(warned(result, /F4（=VLOOKUP\(A4,単価表!A:B,2,FALSE\)/));
   assert.ok(warned(result, /F5（=単価表!B3/));
   assert.deepEqual(result.notes['見積'].cells.F4, [{fields: ['hasFormula', 'formula'], reason: 'HTMLで計算できない数式は値にした'}]);
 });
 
 test('計算できるかは core.js に問い合わせて決めるので、core.js にある関数なら数式のまま残る', () => {
-  const book = miniXlsx({sheet: '<sheetData><row r="1"><c r="A1"><f>ABS(-3)+MOD(7,4)</f><v>6</v></c><c r="B1"><f>SUMIF(A1:A1,"&gt;1")</f><v>6</v></c>' +
-    '<c r="C1"><f>_xlfn.IFS(TRUE,1)</f><v>1</v></c><c r="D1"><f>SUM(A1:A600)</f><v>6</v></c></row></sheetData>'});
+  const book = miniXlsx({sheet: '<sheetData><row r="1"><c r="A1"><f>ABS(-3)+MOD(7,4)</f><v>6</v></c><c r="B1"><f>SUMSQ(2,4)</f><v>20</v></c>' +
+    '<c r="C1"><f>_xlfn.BITAND(6,3)</f><v>2</v></c><c r="D1"><f>SUM(A1:A600)</f><v>6</v></c><c r="E1"><f>SUMIF(A1:A1,"&gt;1")</f><v>6</v></c>' +
+    '<c r="F1"><f>_xlfn.IFS(TRUE,1)</f><v>1</v></c></row></sheetData>'});
   const result = fromXlsx(book), cells = result.workbook.sheets[0].cells;
-  assert.equal(cells.A1.f, '=ABS(-3)+MOD(7,4)');
-  assert.deepEqual([cells.B1, cells.C1, cells.D1], [{t: 'n', v: 6}, {t: 'n', v: 1}, {t: 'n', v: 6}], 'core.js にない関数と、上限の外を参照する式は値');
-  assert.ok(warned(result, /SUMIF/));
-  assert.ok(warned(result, /C1（=IFS\(TRUE,1\)：HTMLで計算できない関数（IFS）/), 'ファイルの中で関数名の前に付く _xlfn. は外して、Excelの画面と同じ名前で知らせる');
+  assert.deepEqual([cells.A1.f, cells.E1.f, cells.F1.f], ['=ABS(-3)+MOD(7,4)', '=SUMIF(A1:A1,">1")', '=IFS(TRUE,1)']);
+  assert.deepEqual([cells.B1, cells.C1, cells.D1], [{t: 'n', v: 20}, {t: 'n', v: 2}, {t: 'n', v: 6}], 'core.js にない関数と、上限の外を参照する式は値');
+  assert.ok(warned(result, /SUMSQ/));
+  assert.ok(warned(result, /C1（=BITAND\(6,3\)：HTMLで計算できない関数（BITAND）/), 'ファイルの中で関数名の前に付く _xlfn. は外して、Excelの画面と同じ名前で知らせる');
   assert.ok(warned(result, /上限（500行・100列）の外を参照/));
+  assert.ok(!warned(result, /HTMLで計算した値が/), '数式のまま残した SUMIF・IFS も、Excelが保存していた値と同じになる');
 });
 
 // Excel saves the functions it added in 2010 and later with _xlfn. before their names (_xlfn.CONCAT(, _xlfn.TEXTJOIN(); a
@@ -194,7 +196,8 @@ test('ふりがな・改行・エラーの値・日付の書き方・1904年の�
   assert.ok(warned(result, /エラーの値/));
   assert.deepEqual(cells.E1, {t: 'n', v: 46023, s: {numFmt: 'yyyy/mm/dd'}}, '日付で書かれた値（t="d"）はシリアル値');
   assert.equal(cells.F1.v, '直接の文字');
-  assert.ok(warned(result, /HTMLで計算した値が、Excelが保存していた値と違う.*S!G1（HTML ""、Excel 0）/), '空のセルの参照はHTMLでは空、Excelでは0');
+  assert.deepEqual(cells.G1, {t: 'f', f: '=A9'});
+  assert.ok(!warned(result, /HTMLで計算した値が/), '空のセルの参照は、HTMLでもExcelと同じく0');
   const date1904 = fromXlsx(miniXlsx({workbookPr: '<workbookPr date1904="1"/>', sheet: '<sheetData><row r="1"><c r="A1" s="2"><v>44561</v></c></row></sheetData>'}));
   assert.equal(date1904.workbook.sheets[0].cells.A1.v, 46023, '1904年から数えた日付は、1900年からのシリアル値にする');
 });

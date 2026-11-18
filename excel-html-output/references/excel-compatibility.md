@@ -9,6 +9,7 @@
 - 測った環境と方法
 - 結果
 - クリップボードHTMLの書き方（実測済みの規則）
+- 関数の計算
 - 文字をつなぐ数式
 - Excelからこの表への貼り付け
 - ブラウザー版Excelで確かめる手順
@@ -50,6 +51,7 @@ Chromeがクリップボードに書いたバイト列をそのままExcelに貼
 | 同上を実際のChromeで「コピー」の処理（Clipboard API） | 0 | 13 | — |
 | 見本 `assets/example.json`「業務一覧」 | 0 | 0 | 12 |
 | 見本 `assets/example.json`「書式テスト」 | 0 | 0 | 4 |
+| 139の関数を1つずつ使った表（数式149個、2026-11-19） | 0 | 4 | 304 |
 
 **仕様どおりの差**は、次の2種類である。
 
@@ -103,9 +105,56 @@ Excelには「元の列幅を保持」という貼り付けのオプションが
 ChromeとEdgeは、`text/html` を書くときに、渡したHTMLを `<html><body><!--StartFragment-->…<!--EndFragment--></body></html>` で包む。
 Ctrl+C（`copy` イベント）と非同期API（`navigator.clipboard.write`）のどちらでも、中身の `x:` 属性や `mso-` の指定は書き換えられなかった。
 
+## 関数の計算
+
+HTMLが計算する139の関数（[データ形式](workbook-schema.md#数式) の表）は、2026-11-19 に、上の環境のデスクトップ版Excel 16.0（ビルド20326、日本語）で測った結果に合わせてある。
+測り方は、同じ値のセルと同じ数式をExcelの中に作り、COMの `Formula` で数式を入れて、Excelが計算した値を読むというものである。
+引数の型（数値・文字・TRUE/FALSE・空のセル・エラー・範囲）と境目の値を変えた数式を、合わせておよそ5,000個測った。
+そのうち規則を確かめる2,501個を、Excelの中で計算させて保存した見本 `tests/fixtures/excel-functions.xlsx` に入れてある（数式の一覧と作り方は `tests/fixtures/excel-functions.mjs`）。
+`tests/xlsx-functions.test.mjs` は、この見本を読み込み、どの数式も数式のまま移ることと、HTMLの計算がExcelの保存した値と最後の2進の桁まで同じになることを確かめる（例外は下に書いた1個）。
+計算を変えたら、見本をExcelで作り直して（`node tests/fixtures/excel-functions.mjs`）、このテストを通す。
+139の関数を1つずつ使った表は、`verify_excel_paste.py` と `verify_xlsx.py` でも照合した。
+Excelに貼った結果も、書き出したxlsxをExcelで開いた結果も、Excelで直接作った表と数式・値が同じになった。
+
+測って分かった主な規則は次のとおりで、HTMLも同じ動きをする。
+
+| 項目 | Excelの動き（HTMLも同じ） | 例 |
+|---|---|---|
+| 空のセル | 計算では0、文字では空の文字、比較では相手の型の空の値になる。ISBLANK がTRUEになるのは空のセルだけで、`""` を返す数式のセルはFALSE | A1が空なら `=A1` は0、`=A1=""` はTRUE |
+| 文字の数字 | 計算では数値として読む。全角の数字、桁区切り、`¥`・`$`、`%`、`(5)`、日付・時刻（和暦を含む）の書き方も読む | `="1,000"+1` は1001、`="R8.1.2"+0` は46024 |
+| 数値の等しさ | 有効数字15桁で同じなら等しい（大小の比較も同じ） | `=0.1+0.2=0.3` はTRUE、`=1+23*2^-52=1` はFALSE |
+| 型の違う値の比較 | 数値 < 文字 < FALSE < TRUE の順。文字は大文字と小文字を区別しない（全角と半角、かなとカナは区別する） | `="a"="A"` はTRUE、`=1<"a"` はTRUE |
+| 数式に書いた数値 | 有効数字15桁を超える桁を切り捨てて読む（Excelはその形で保存する） | `=INT(2.9999999999999996)` は2 |
+| 集計関数の引数 | SUM・AVERAGE・MAX などは、直接書いた文字の数字・TRUE・空の引数を数え、セルの中の文字やTRUEは数えない。PRODUCT は空の引数を数えない。MODE は直接書いた文字やTRUEも数えず、空の引数は `#VALUE!` | `=SUM("2",TRUE,1)` は4、`=PRODUCT(5,)` は5 |
+| 条件（COUNTIF など） | `5`・`"5"`・`"=5"` は数値の5と文字の `"5"` を数える。`"<>5"` は数値の5だけを除く。数値の前後の空白は無視する。空のセルを条件にすると0。エラー値（文字の `"#N/A"` も）を条件にすると、そのエラーのセルを数える | `=COUNTIF(A1:A9,"<>5")` は文字の `"5"` を数える |
+| 近似一致の検索（VLOOKUP・HLOOKUP の TRUE、MATCH の 1、LOOKUP） | 二分探索で、等しい値に当たると、その後に続く等しい値の最後まで進む。並んでいない表でもExcelと同じ位置を返す | 1,2,2,2,3 の列で `MATCH(2,範囲)` は4 |
+| MATCH の -1 | 先頭から順に見て、等しい値で止まり、探す値より小さい値の手前で止まる | 1,3,5,… の列で `MATCH(1,範囲,-1)` は1、`MATCH(2,範囲,-1)` は `#N/A` |
+| XLOOKUP・XMATCH の二分探索（検索モード 2・-2） | 等しい値に当たったところで止まる二分探索 | |
+| MOD | 2数の正確な余り（符号は除数に合わせる）。商が 2^50/1000（約1.1259E+12）を超えると `#NUM!` | `=MOD(6,0.1)` は0.09999999999999967 |
+| 負の数のべき乗 | 1/指数 が奇数の整数のときだけ計算する | `=(-8)^(1/3)` は-2、`=(-8)^(2/3)` は `#NUM!` |
+| 最後の桁 | ROUNDUP は切り捨てた値に単位を足し、CEILING・FLOOR・MROUND は丸めた商に単位を掛け、VAR・STDEV（標本）は合計と2乗の合計から求める。結果は最後の2進の桁までExcelと同じ | `=ROUNDUP(1.15,1)` は1.2000000000000002 |
+| 小数の引数 | MROUND は余りを15桁で見て半分以上なら切り上げる。LARGE は次の整数、SMALL は前の整数の順位、WORKDAY の日数は小さい方の整数にする | `=MROUND(0.15,0.1)` は0.2、`=SMALL(範囲,1.5)` は最小の値 |
+| 分析ツールから来た関数 | EDATE・EOMONTH・MROUND・QUOTIENT・WEEKNUM・WORKDAY・NETWORKDAYS（.INTL も）は、TRUE・FALSE を受け付けない（セルの中のTRUEも） | `=EDATE(TRUE,1)` は `#VALUE!` |
+| 1900年の日付 | シリアル値60を、Excelと同じく1900年2月29日として扱う。EDATE と EOMONTH は暦どおり2月を28日までとする | `=EOMONTH(1,1)` は59（1900/2/28） |
+| DATEDIF の "YD" | 終わりの月日が始まりの月日より前なら、始まりの翌年のその月日までの日数。そうでなければ、終わりの日が始まりの日以上なら始まりの年、小さければ終わりの年の中での日数 | `=DATEDIF(DATE(2020,2,28),DATE(2021,3,1),"YD")` は1 |
+| 週末の番号（NETWORKDAYS.INTL・WORKDAY.INTL） | 11〜17は日曜〜土曜の1日だけを休みにする。全部休みの `"1111111"` は、NETWORKDAYS.INTL では0日、WORKDAY.INTL では日数が0のときだけ使える | |
+| 文字の数え方 | LEN・MID・REPLACE・FIND・SEARCH は UTF-16 の単位で数え（𩸽 は2）、LEFT・RIGHT は文字で数える。SEARCH の `?` も UTF-16 の1単位 | `=LEN("𩸽")` は2、`=LEFT("𩸽の",1)` は𩸽 |
+| SEARCH と FIND の開始位置 | FIND は最後の文字の次から探せるが、SEARCH は探せない（`#VALUE!`） | `=SEARCH("","abc",4)` は `#VALUE!` |
+| SUBSTITUTE の何番目 | 重なり合う出現も数える | `=SUBSTITUTE("aaaa","aa","b",2)` は aba |
+| TEXT | 結果が255文字を超えると `#VALUE!`。`G/標準`、和暦（`ggge`）、曜日（`aaa`）、タイ仏暦（`bbbb`）を読む。使わない区分も含めて、どの区分も正しい書き方でないと `#VALUE!` | `=TEXT(1,"0;0y")` は `#VALUE!` |
+| JIS | 日本語版の画面での DBCS の名前。ファイルとクリップボードは DBCS の名前でしか読まない（JIS は `#NAME?`）ので、HTMLは JIS を DBCS として計算し、DBCS と書き出す | |
+| 新しい関数の保存 | IFS・IFNA・XOR・SWITCH・XLOOKUP・XMATCH・MAXIFS・MINIFS・CONCAT・TEXTJOIN・CEILING.MATH・FLOOR.MATH・MODE.SNGL・RANK.EQ・STDEV.S・STDEV.P・VAR.S・VAR.P・UNICHAR・UNICODE・ISOWEEKNUM・DAYS の22個は、xlsxの中で名前の前に `_xlfn.` が付く | |
+
+次の点は、まだExcelと違う。
+
+- 指数が小数のべき乗（`8^(1/3)` など）は、Excel独自の計算で最後の2進の桁がずれることがある（Excelでは1.9999999999999998）。測った238個のうち209個は同じで、残りも最後の桁だけが違い、表示される15桁は同じである。見本の2,501個では `=(-8)^(-1/3)` の1個だけが違う。
+- TEXT の表示形式に文字（`-` や空白など）をおよそ60文字以上並べると、Excelは表示形式として受け付けず `#VALUE!` にする。その数え方は複雑で、HTMLは再現していない。
+- Excelは、`=DATE(…)`・`=TODAY()`・`=NOW()`・`=TIME(…)` を入力した「標準」のセルに、日付や時刻の表示形式を自動で付ける。HTMLは付けないので、日付として見せるセルには表示形式を指定する。
+- 表にない関数は、Excelが計算できる関数でも、HTMLでは `#NAME?` になる。TEXTBEFORE・TEXTAFTER などの Microsoft 365 にだけある関数は、測ったExcel 2021 でも `#NAME?` になった。
+
 ## 文字をつなぐ数式
 
-`&` と CONCATENATE・CONCAT・TEXTJOIN の計算（`assets/core.js` の `numberText` と `join`）は、2026-11-19 に、デスクトップ版Excel 16.0（ビルド20326、日本語）で測った結果に合わせてある。
+`&` と CONCATENATE・CONCAT・TEXTJOIN の計算（`assets/formulas.js` の `numberText` と各関数）は、2026-11-19 に、デスクトップ版Excel 16.0（ビルド20326、日本語）で測った結果に合わせてある。
 測り方は、同じ値のセルと同じ数式をExcelの中に作り、COMの `Formula` で数式を入れて、`Value2` で結果を読むというものである。
 `Formula` で入れた数式は、xlsxファイルの数式やクリップボードの `x:fmla` と同じく、動的配列でない数式として計算される（貼り付けた `=A1:A3&"x"` も、下の空いたセルへ広がらなかった）。
 測った数式の多くは、Excelの中で作って保存した見本 `tests/fixtures/excel-text.xlsx`（作り方は `tests/fixtures/make-excel-text.ps1`）に入れてある。
@@ -140,13 +189,11 @@ TEXTJOIN は、ignore_empty が TRUE で空の文字を入れないときも、�
 xlsxファイルの中では、CONCAT と TEXTJOIN の名前の前に `_xlfn.` が付く。
 Excelは、xlsxの形式が決まった後（Excel 2010以降）に増えた関数をこの形で保存し、この2つは Excel 2016 で増えたからである（CONCATENATE には付かない）。
 `_xlfn.` を付けずに書いたファイルは、Excelで開いて全部の数式を計算し直しても `#NAME?` になった。
-そのため、`scripts/xlsx.cjs` は `_xlfn.` を付けて書き、`scripts/read_xlsx.cjs` は外して読む。
+そのため、`scripts/xlsx.cjs` は `_xlfn.` を付けて書き（付ける関数の一覧は `NEWER_FUNCTIONS`）、`scripts/read_xlsx.cjs` は外して読む。
 クリップボードの `x:fmla` では、`_xlfn.` を付けなくても計算された。
 
-次の動きは、まだExcelと違う（`tests/core.test.cjs` に `todo` として残してある）。
-
-- 数字だけの文字列を計算に使うと、Excelは数値として計算するが、HTMLは `#VALUE!` にする（`="1"&"2"+1` はExcelでは `13`）。
-- `""` を返す数式のセルを TEXTJOIN の ignore_empty に渡すと、Excelは `#VALUE!` にする。HTMLは、空のセルと `""` を区別しないので、FALSEとして読む。
+数字だけの文字列も、Excelと同じく計算に使える（`="1"&"2"+1` は `13`）。
+`""` を返す数式のセルを TEXTJOIN の ignore_empty に渡すと、Excelと同じく `#VALUE!` になる（HTMLは空のセルと `""` を区別する）。
 
 ## Excelからこの表への貼り付け
 
@@ -191,7 +238,7 @@ Excelがクリップボードに置くHTMLは、書式を `<style>` 内のクラ
 - セルの一部分だけの書式、縦書き・回転、条件付き書式、図形、グラフ、フィルター、ピボット、入力規則、保護、コメント、印刷設定
 - 画像のうち、セル範囲のコピーでExcelへ渡すこと（画像は、選んでCtrl+Cで単独にコピーする）、回転・トリミング、セル内への配置
 - 非連続範囲の選択、行・列の非表示
-- シートをまたぐ式、名前定義、[データ形式](workbook-schema.md#数式) にない関数、動的配列
+- シートをまたぐ式、名前定義、[データ形式](workbook-schema.md#数式) にない関数、配列定数、動的配列
 - 一覧にない表示形式（`#,##0_ ;[赤]-#,##0` など）。Excelから貼り付けると「標準」になる
 - 狭い列での `####` 表示、ブラウザーとExcelのフォント描画の完全な一致
 - 行・列の削除で範囲参照が縮むExcelの動作（このHTMLでは端点が消えると `#REF!` になる）

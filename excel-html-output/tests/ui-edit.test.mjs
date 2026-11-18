@@ -132,6 +132,28 @@ test('文字をつなぐ数式（&・CONCATENATE・CONCAT・TEXTJOIN）は、Exc
   assert.equal(await x.text('G4'), '保守作業、監視、設定作業、追加');
 });
 
+test('検索・条件つきの集計・日付・TEXT などの関数も、Excelと同じ値を表示し、参照先を変えると計算し直す', async t => {
+  const x = await env.open(t, book);
+  await x.enter('F4', '=VLOOKUP("00124",A4:E6,5,FALSE)');
+  await x.enter('F5', '=SUMIF(C4:C6,">1",E4:E6)');
+  await x.enter('F6', '=COUNTIF(B4:B6,"*作業")');
+  await x.enter('G4', '=TEXT(D4,"#,##0")&"円"');
+  await x.enter('G5', '=IFERROR(XLOOKUP("99999",A4:A6,B4:B6),"なし")');
+  await x.enter('G6', '=TEXT(DATE(2026,1,2),"ggge年m月d日(aaa)")');
+  await x.enter('G7', '=INDEX(B4:B6,MATCH(MAX(E4:E6),E4:E6,0))');
+  await x.enter('G8', '=jis("ABC")');
+  await x.enter('H5', '=SUMPRODUCT((C4:C6>=2)*E4:E6)');
+  assert.deepEqual([await x.text('F4'), await x.text('F5'), await x.text('F6')], ['10000', '46000', '2']);
+  assert.deepEqual([await x.text('G4'), await x.text('G5'), await x.text('G6'), await x.text('G7'), await x.text('G8')],
+    ['12,000円', 'なし', '令和8年1月2日(金)', '保守作業', 'ＡＢＣ'], 'JIS は日本語版Excelでの DBCS の名前');
+  assert.equal(await x.text('H5'), '46000');
+  await x.enter('C5', '5');
+  await x.enter('C6', '2');
+  assert.deepEqual([await x.text('F4'), await x.text('F5'), await x.text('G7'), await x.text('H5')], ['25000', '121000', '設定作業', '121000']);
+  await x.clickCell('G8');
+  assert.equal(await x.formula(), '=jis("ABC")', '数式は打ったとおりに残る');
+});
+
 test('範囲を選んで入力すると、Enter のたびに範囲の中の次のセルへ進む', async t => {
   const x = await env.open(t, book);
   await x.select('H4:H5');

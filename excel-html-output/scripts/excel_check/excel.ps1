@@ -103,7 +103,13 @@ function Build-Native($xl, [switch]$NormalFromBook) {
       # call failed with "Unable to cast object of type 'System.Double' to type 'System.String'" (PowerShell 7.6).
       'n' { $n = $cell.v; if ($n -is [System.Numerics.BigInteger]) { $n = [double]::Parse($n.ToString(), [Globalization.CultureInfo]::InvariantCulture) }; $x.Value2 = [double]$n }
       'b' { $x.Value2 = [bool]$cell.v }
-      'f' { $x.Formula = $cell.f }
+      # .Formula takes English names: JIS, as the Japanese Excel shows DBCS (and the page takes it), is written as DBCS.
+      # Excel gives a cell left General a format of its own for some formulas (=DATE(...) a date); the page's cell is
+      # General, so that is set back (the Japanese Excel takes General only by its own name, G/標準).
+      'f' {
+        $x.Formula = [regex]::Replace([string]$cell.f, '"(?:[^"]|"")*"|(?<![A-Za-z0-9_.])JIS(?=\s*\()', { param($m) if ($m.Value[0] -eq '"') { $m.Value } else { 'DBCS' } }, 'IgnoreCase')
+        if ($st.numFmt -eq 'General' -and $fx.NumberFormat -ne 'General') { try { $fx.NumberFormat = 'General' } catch { $fx.NumberFormatLocal = 'G/標準' } }
+      }
     }
     $f = $fx.Font
     if (-not $NormalFromBook -or $st.font -ne $bookFont.font) { $f.Name = $st.font }
