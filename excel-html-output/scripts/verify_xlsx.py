@@ -180,7 +180,18 @@ def reader_notes(xlsx):
     return json.loads(result.stdout.decode('utf-8'))['notes']
 
 
+def load_workbook(args):
+    """The table the .xlsx file was made from, read as build.py read it: the shorthand of --input made into cells, or
+    the HTML (--base) with the state applied (--state)."""
+    if args.input:
+        return build.read_input(args.input)
+    workbook = build.apply_state(args.base, args.state, mode='verify') if args.state else build.read_base(args.base)
+    build.validate(workbook)
+    return workbook
+
+
 def main():
+    build.utf8_output()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--xlsx', required=True, type=Path, help='build.py --xlsx で書き出したファイル（--source なら、HTMLを作った元のファイル）')
     ap.add_argument('--input', type=Path, help='ブック JSON')
@@ -198,11 +209,7 @@ def main():
         print(f'エラー: xlsx ファイルがありません: {args.xlsx}', file=sys.stderr)
         return 1
     try:
-        if args.input:
-            workbook = build.read_json(args.input)
-        else:
-            workbook = build.apply_state(args.base, args.state) if args.state else build.read_base(args.base)
-        build.validate(workbook)
+        workbook = load_workbook(args)
         import_notes = reader_notes(args.xlsx) if args.source else None
     except (ValueError, KeyError, TypeError, OSError) as exc:
         print('エラー: ' + str(exc), file=sys.stderr)

@@ -425,6 +425,13 @@ test('数式のまま移した数式は、Excelが保存したエラーの値と
   assert.ok(warned(result, /HTMLで計算した値が、Excelが保存していた値と違う数式がある: S!C1（HTML 1、Excel "#N\/A"）/));
 });
 
+test('循環参照の数式は、計算の仕組みを直す候補として知らせない（HTMLは #CIRC! で、build.py が循環参照として知らせる）', () => {
+  const sheet = '<sheetData><row r="1"><c r="A1"><f>B1+1</f><v>0</v></c><c r="B1"><f>A1+1</f><v>0</v></c><c r="C1"><f>A1*2</f><v>0</v></c></row></sheetData>';
+  const result = fromXlsx(miniXlsx({sheet}));
+  assert.deepEqual([cellsOf(result).A1.f, cellsOf(result).B1.f], ['=B1+1', '=A1+1'], '数式のまま移す');
+  assert.ok(!warned(result, /保存していた値と違う/), result.warnings.join('\n'));
+});
+
 test('題名は文書のプロパティの題名、なければファイル名にし、ブックのIDはファイル名と中身から決め、開いていたシートを最初に表示する', () => {
   const sheets = [{name: '一', xml: '<sheetData/>'}, {name: '二', xml: '<sheetData/>'}];
   const titled = fromXlsx(handXlsx({sheets, core: '<dc:title>見積書 2026</dc:title>', workbook: '<bookViews><workbookView activeTab="1"/></bookViews>'}), {name: 'Quote 2026.xlsx'});

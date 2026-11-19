@@ -486,7 +486,6 @@
           "v": "00127",
           "s": {
             "valign": "middle",
-            "borderBottom": "1px solid #d8e2dc",
             "numFmt": "@"
           }
         },
@@ -494,24 +493,21 @@
           "t": "s",
           "v": "検証",
           "s": {
-            "valign": "middle",
-            "borderBottom": "1px solid #d8e2dc"
+            "valign": "middle"
           }
         },
         "C9": {
           "t": "s",
           "v": "伊藤",
           "s": {
-            "valign": "middle",
-            "borderBottom": "1px solid #d8e2dc"
+            "valign": "middle"
           }
         },
         "D9": {
           "t": "n",
           "v": 4,
           "s": {
-            "valign": "middle",
-            "borderBottom": "1px solid #d8e2dc"
+            "valign": "middle"
           }
         },
         "E9": {
@@ -519,7 +515,6 @@
           "v": 14000,
           "s": {
             "valign": "middle",
-            "borderBottom": "1px solid #d8e2dc",
             "numFmt": "¥#,##0"
           }
         },
@@ -528,7 +523,6 @@
           "f": "=D9*E9",
           "s": {
             "valign": "middle",
-            "borderBottom": "1px solid #d8e2dc",
             "numFmt": "¥#,##0",
             "bold": true
           }
@@ -538,7 +532,6 @@
           "v": 0.125,
           "s": {
             "valign": "middle",
-            "borderBottom": "1px solid #d8e2dc",
             "numFmt": "0.00%"
           }
         },
@@ -547,7 +540,6 @@
           "v": "列幅・行高は見出しの境界をドラッグ",
           "s": {
             "valign": "middle",
-            "borderBottom": "1px solid #d8e2dc",
             "wrap": true,
             "size": 10
           }

@@ -86,6 +86,15 @@ test('Excelが関数名の前に _xlfn. を付けて保存した関数も、計�
   assert.ok(!warned(result, /HTMLで計算した値が/), 'HTMLの計算も、Excelが保存していた値と同じ');
 });
 
+test('共有数式は、数字を含む名前の関数（LOG10）や指数で書いた数をそのままにして、参照だけをずらして移す', () => {
+  const sheet = '<sheetData><row r="1"><c r="A1"><v>100</v></c><c r="B1"><f t="shared" ref="B1:B3" si="0">LOG10(A1*1E2)</f><v>4</v></c></row>' +
+    '<row r="2"><c r="A2"><v>1000</v></c><c r="B2"><f t="shared" si="0"/><v>5</v></c></row>' +
+    '<row r="3"><c r="A3"><v>10</v></c><c r="B3"><f t="shared" si="0"/><v>3</v></c></row></sheetData>';
+  const result = fromXlsx(miniXlsx({sheet})), cells = result.workbook.sheets[0].cells;
+  assert.deepEqual([cells.B1.f, cells.B2.f, cells.B3.f], ['=LOG10(A1*1E2)', '=LOG10(A2*1E2)', '=LOG10(A3*1E2)']);
+  assert.ok(!warned(result, /HTMLで計算した値が/), 'HTMLの計算も、Excelが保存していた値（4・5・3）と同じ');
+});
+
 // tests/fixtures/excel-text.xlsx holds formulas that join text, made and saved inside desktop Excel 16.0 (build 20326) with
 // the values Excel computed (tests/fixtures/make-excel-text.ps1). They are read here with tests/lib/xlsx.mjs, apart from the
 // importer, and compared with what core.js computes on the book read from the file.

@@ -115,8 +115,17 @@ test('a number written in a formula is read to 15 significant digits, the rest c
   for(const [f,want] of [['=INT(2.9999999999999996)',2],['=TRUNC(-2.0000000000000004)',-2],['=HOUR(0.5213541666666667)',12],['=123456789012345678',123456789012345000],
     ['=0.30000000000000004=0.3',true],['=1.0000000000000002',1],['=.5',0.5],['=1E+20',1e20],['=1.234567890123456789E-5',0.0000123456789012345]])
     assert.equal(result(f),want,f);});
-test('a number aligned general with an indent is shown aligned left, as Excel aligns a general cell it indents',{todo:'the screen (css) aligns the number right and indents it from the right, while the clipboard (xlCss) and the xlsx write it aligned left; only a book JSON holds this, since the ribbon has no indent button'},()=>{
-  assert.match(C.css({...C.DEFAULT,indent:2},5),/text-align:left/);});
+// Excel aligns a cell aligned "general" left once it is indented, whatever its value; the clipboard (xlCss) and the
+// xlsx write such a cell aligned left, and the screen must show it so too (a book JSON can hold it: the ribbon has no
+// indent button, and an xlsx read in brings it as aligned left).
+test('a cell aligned general with an indent is shown aligned left and indented from the left, whatever its value, as the clipboard writes it',()=>{
+  for(const value of [5,-0.5,true,'#N/A','文字']){const st={...C.DEFAULT,indent:2},shown=C.css(st,value);
+    assert.match(shown,/text-align:left;/,JSON.stringify(value));
+    assert.match(shown,/padding-left:21px;padding-right:3px/,JSON.stringify(value)+': two levels of 9px, on the left');
+    assert.match(C.xlCss(st,value),/text-align:left;/,JSON.stringify(value)+': the clipboard writes it the same');}
+  assert.match(C.css(C.DEFAULT,5),/text-align:right;.*padding-left:3px;padding-right:3px/,'a number not indented stays aligned right');
+  assert.match(C.css(C.DEFAULT,true),/text-align:center;/,'and TRUE centred');
+  assert.match(C.css({...C.DEFAULT,align:'right',indent:1},5),/text-align:right;.*padding-left:3px;padding-right:12px/,'aligned right, it is indented from the right');});
 test('validate takes only the values in CHOICES and CELL_TYPES',()=>{const w=make(),s=w.sheets[0];
   for(const align of C.CHOICES.align){s.cells.A1={t:'s',v:'x',s:{align}};assert.doesNotThrow(()=>C.validate(w),align);}
   for(const valign of C.CHOICES.valign){s.cells.A1={t:'s',v:'x',s:{valign}};assert.doesNotThrow(()=>C.validate(w),valign);}
@@ -223,3 +232,127 @@ test('& and CONCATENATE cut a text at 32767 characters, as Excel does; CONCAT an
     ['=TEXTJOIN(",",TRUE,A11,"")','#VALUE!'],['=TEXTJOIN(",",TRUE,A12,"")',y(32766)],['=TEXTJOIN(",",TRUE,A13,"","","")',y(32765)],
     ['=TEXTJOIN(",",TRUE,A13,A2:A5)','#VALUE!'],['=TEXTJOIN(",",FALSE,A13,"","")',y(32765)+',,'],['=TEXTJOIN(",",FALSE,A13,"","","")','#VALUE!'],
     ['=TEXTJOIN(",",TRUE,A11,"",A6)','#N/A']],cells);});
+test('a number format shows what toLocaleString shows with the same options, and quickly for many cells',()=>{
+  // Excel has no negative zero, so -0 shows as 0 in both (the next test but one).
+  const old=(value,fmt)=>{if(value===0)value=0;const percent=fmt.includes('%'),decimals=fmt.includes('.00')?2:0,yen=fmt.startsWith('¥'),neg=yen&&value<0;
+    return (neg?'-':'')+(yen?'¥':'')+((neg?-value:value)*(percent?100:1)).toLocaleString('en-US',{minimumFractionDigits:decimals,maximumFractionDigits:decimals,useGrouping:fmt.includes(',')})+(percent?'%':'');};
+  const values=[0,1,-1,0.5,-0.5,1.005,2.675,0.125,0.0005,-0.0049,1234.5,-1234.5,999999.995,12345678.9,-98765.4321,1e15,-1e15,1e21,1.23e-7,Number.MAX_SAFE_INTEGER,Number.MIN_VALUE];
+  for(let i=0;i<300;i++)values.push((Math.sin(i)*10**(i%12))*(i%3?1:-1));
+  for(const fmt of ['0','0.00','#,##0','#,##0.00','0%','0.00%','¥#,##0'])for(const v of values)assert.equal(C.display(v,fmt),old(v,fmt),fmt+' '+v);
+  const start=performance.now();for(let i=0;i<20000;i++)C.display(i*1.25,i%2?'#,##0':'0.00%');
+  const ms=performance.now()-start;
+  assert.ok(ms<250,'表示形式の書式化2万回に '+ms.toFixed(0)+'ms かかった（セルの多い表で、入力のたびに描き直す時間が延びる）');
+});
+test('copying a formula moves its cell references only: not the name of a function with digits (LOG10), a sheet name or a text',()=>{
+  assert.equal(C.shiftFormula('=LOG10(A1)+SUM(A1:B2)',1,1),'=LOG10(B2)+SUM(B2:C3)','LOG10( は番地 LOG10 ではない');
+  assert.equal(C.shiftFormula('=log10(a1)',2,0),'=log10(A3)');
+  assert.equal(C.shiftFormula('=Sheet2!A1+A1',1,0),'=Sheet2!A2+A2','シート名の Sheet2 は番地ではない');
+  assert.equal(C.shiftFormula('="LOG10"&A1&"B2"',0,1),'="LOG10"&B1&"B2"');
+  assert.equal(C.shiftFormula('=1E5+2e3*A1',1,0),'=1E5+2e3*A2','指数で書いた数の E5 は番地ではない');
+  assert.equal(C.shiftFormula('=ABCD1+A1',1,0),'=ABCD1+A2','4文字の名前の途中を番地として読まない');
+  assert.equal(C.shiftFormula('=A1+$B$2+B$3',1,1),'=B2+$B$2+C$3');
+  assert.equal(C.shiftFormula('=A1',-1,0),'=#REF!');
+  const w=make(),s=w.sheets[0];s.cells={A1:{t:'n',v:100},A2:{t:'n',v:1000},B1:{t:'f',f:'=LOG10(A1)'},B2:{t:'f',f:C.shiftFormula('=LOG10(A1)',1,0)}};
+  assert.deepEqual([C.calculate(w,s,0,1),C.calculate(w,s,1,1)],[2,3]);
+});
+test('two different lines on one cell edge are a border conflict; a merged cell is one block with the lines of its top-left cell, and the default style counts',()=>{
+  const w=make(),s=w.sheets[0],L='1px solid #808080';
+  s.merges=[C.range('B2:C3')];
+  s.cells={
+    A1:{t:'s',v:'',s:{borderBottom:L}},A2:{t:'s',v:'',s:{borderTop:'2px solid #217346'}},
+    E1:{t:'s',v:'',s:{borderRight:L}},F1:{t:'s',v:'',s:{borderLeft:L}},
+    E3:{t:'s',v:'',s:{borderRight:'1px solid #ABCDEF'}},F3:{t:'s',v:'',s:{borderLeft:'1px solid #abcdef'}},
+    E5:{t:'s',v:'',s:{borderBottom:L}},
+    B2:{t:'s',v:'結合',s:{borderRight:'2px solid #000000'}},C2:{t:'s',v:'',s:{borderRight:'3px double #ff0000'}},D3:{t:'s',v:'',s:{borderLeft:'1px solid #000000'}},
+  };
+  assert.deepEqual(C.borderConflicts(w,s),[
+    {a:'A1',b:'A2',edge:'下/上',lines:[L,'2px solid #217346'],cells:['A1','A2']},
+    {a:'C3',b:'D3',edge:'右/左',lines:['2px solid #000000','1px solid #000000'],cells:['B2:C3','D3']},
+  ],'同じ線・大文字と小文字だけ違う色・片方だけの線・結合で隠れたセルの線は食い違いではない');
+  assert.deepEqual(C.borderConflicts(w,s,C.range('A1:A1')),[],'範囲を渡すと、その中の境界だけを見る');
+  assert.equal(C.borderConflicts(w,s,C.range('A1:A2')).length,1);
+  const d=make(),ds=d.sheets[0];ds.defaultStyle={borderTop:L};ds.cells={B1:{t:'s',v:'',s:{borderBottom:'2px solid #000000'}},C1:{t:'s',v:'',s:{borderBottom:L}}};
+  assert.deepEqual(C.borderConflicts(d,ds).map(x=>[x.a,x.b]),[['B1','B2']],'既定の書式の線とも比べる');
+});
+test('the references of a formula are found as formulas.js reads them, also when the formula goes to Excel: 1E5 is a number and LOG10( a function',()=>{
+  assert.equal(C.blockFormula('=1E5+B2',C.range('B2:F6')),'=1E5+A1','指数で書いた数の E5 を、範囲の番地として書き換えない');
+  assert.equal(C.blockFormula('=LOG10(B2)+ABCD1',C.range('B2:C3')),'=LOG10(A1)+ABCD1');
+  assert.equal(C.mapRefs('=A1+"B2"&$C$3+LOG10(d4)+1E5+Sheet2!E6',(m,c$,col,r$,row)=>'['+c$+col+r$+row+']'),'=[A1]+"B2"&[$C$3]+LOG10([d4])+1E5+Sheet2![E6]');
+});
+test('cautions tell formulas the page cannot read, ones it cannot compute that Excel may, ones that only receive such an error, and errors Excel shows too, each with its cause',()=>{
+  const w=make(),s=w.sheets[0];
+  s.cells={
+    A1:{t:'f',f:'=A2*Tax'},A2:{t:'f',f:'=SUM(B1'},A3:{t:'f',f:'=Sheet2!A1'},
+    B1:{t:'f',f:'=TEXTBEFORE("a-b","-")'},B2:{t:'f',f:'=E99+SUM(A1:P1)'},B3:{t:'f',f:'=B3+1'},
+    C1:{t:'f',f:'=B1&"x"'},C2:{t:'f',f:'=INDEX(D1:D3,5)'},C3:{t:'f',f:'=#REF!'},C4:{t:'f',f:'=C2*2'},
+    D5:{t:'f',f:'=SUM(D1:D3)'},
+  };
+  const c=C.cautions(w);
+  assert.deepEqual(c.unreadable,['Sheet1!A1 =A2*Tax','Sheet1!A2 =SUM(B1','Sheet1!A3 =Sheet2!A1']);
+  assert.deepEqual(c.uncomputable,['Sheet1!B1 #NAME?（TEXTBEFORE はHTMLで計算できない関数）','Sheet1!B2 #REF!（E99・P1 はシートの外。シートは30行・15列）','Sheet1!B3 #CIRC!（循環参照）']);
+  assert.deepEqual(c.dependent,['Sheet1!C1 #NAME?','Sheet1!C4 #REF!'],'参照先のエラーを受けているだけの数式');
+  assert.deepEqual(c.errors,['Sheet1!C2 #REF!','Sheet1!C3 #REF!'],'Excelでも同じエラーになる数式');
+  assert.deepEqual(c.textFormulas,[]);
+});
+test('copying a formula does not change a quoted sheet name, and a reference after a sheet name is told with its sheet',()=>{
+  assert.equal(C.shiftFormula("='Q1 data'!A1+A1",1,1),"='Q1 data'!B2+B2",'シート名の中の Q1 は番地ではない');
+  assert.equal(C.shiftFormula("='It''s B2'!C3",1,0),"='It''s B2'!C4");
+  assert.equal(C.shiftFormula("='Q1 data'!A:A+A1",1,0),"='Q1 data'!A:A+A2",'番地の続かないシート名の中も書き換えない');
+  assert.equal(C.shiftFormula('=見積!A1+A1',1,0),'=見積!A2+A2');
+  const seen=[];C.mapRefs("=Sheet2!A1+'Q1 data'!$B$2+C3+見積!D4",(m,c$,col,r$,row,sheet)=>{seen.push([m,sheet]);return m;});
+  assert.deepEqual(seen,[['A1','Sheet2'],['$B$2',"'Q1 data'"],['C3',undefined],['D4','見積']]);
+  const range=[];C.mapRefs("=SUM(Sheet2!A1:B2)+'Q1 data'!A1:$B$5+C1:D2",(m,c$,col,r$,row,sheet)=>{range.push([m,sheet]);return m;});
+  assert.deepEqual(range,[['A1','Sheet2'],['B2','Sheet2'],['A1',"'Q1 data'"],['$B$5',"'Q1 data'"],['C1',undefined],['D2',undefined]],'範囲の後ろの番地も、前の番地のシートのもの');
+  assert.equal(C.shiftFormula('=売上A1+A1',1,0),'=売上A1+A2','日本語の名前の中の番地の形は番地ではない');
+  assert.equal(C.shiftFormula('=A1売上+A1',1,0),'=A1売上+A2');
+});
+test('a negative zero shows as 0, as Excel has no negative zero',()=>{
+  for(const [fmt,shown] of [['General','0'],['0','0'],['0.00','0.00'],['#,##0','0'],['0%','0%'],['¥#,##0','¥0']])assert.equal(C.display(-0,fmt),shown,fmt);
+  const w=make(),s=w.sheets[0];s.cells={A1:{t:'n',v:0},B1:{t:'f',f:'=A1*-1',s:{numFmt:'¥#,##0'}},B2:{t:'f',f:'=ROUND(-0.4,0)',s:{numFmt:'0'}}};
+  assert.deepEqual([C.display(C.calculate(w,s,0,1),'¥#,##0'),C.display(C.calculate(w,s,1,1),'0')],['¥0','0']);
+});
+test('a reference stands alone: not after a point (1.E5, x.A1) nor before an underscore (Q1_total), as formulas.js reads them',()=>{
+  assert.equal(C.shiftFormula('=1.E5+A1',1,0),'=1.E5+A2');
+  assert.equal(C.shiftFormula('=Q1_total+A1',1,0),'=Q1_total+A2');
+  assert.equal(C.shiftFormula('=x.A1+A1',1,0),'=x.A1+A2');
+});
+test('a formula that only reads an error of another kind is an error of its own; a hidden function or reference the page cannot compute is told even when IFERROR hides it; SUMIF reaching beyond the sheet is told so',()=>{
+  const w=make(),s=w.sheets[0];
+  s.cells={
+    A1:{t:'f',f:'=1/0'},A2:{t:'n',v:1},
+    B1:{t:'f',f:'=VLOOKUP(1,A1:A2,3,FALSE)'},
+    C1:{t:'f',f:'=IFERROR(VLOOKUP(1,$A$1:$B$100,2,FALSE),"なし")'},C2:{t:'f',f:'=IFERROR(TEXTBEFORE("a-b","-"),"")'},
+    D1:{t:'f',f:'=SUMIF(A1:A30,">0",B5)'},
+  };
+  const c=C.cautions(w);
+  assert.deepEqual(c.errors,['Sheet1!B1 #REF!'],'読んだのは #DIV/0! で、式の #REF! は VLOOKUP の列番号から来る');
+  assert.deepEqual(c.dependent,[]);
+  assert.deepEqual(c.uncomputable,['Sheet1!C1 "なし"（B100 はシートの外。シートは30行・15列）','Sheet1!C2 ""（TEXTBEFORE はHTMLで計算できない関数）','Sheet1!D1 #REF!（B34 はシートの外。シートは30行・15列）']);
+});
+test('copying a formula keeps a reference that does not move (absolute, or not moved that way) as written, and turns a moved one into #REF! only below row 1 or column A, or beyond Excel',()=>{
+  assert.equal(C.shiftFormula('=SUM($A$1:$A$1000)+B1',1,0),'=SUM($A$1:$A$1000)+B2','動かない番地は、シートの外でも書いたまま');
+  assert.equal(C.shiftFormula('=A600',0,1),'=B600');
+  assert.equal(C.shiftFormula('=A499',1,0),'=A500','Excelの行の範囲なら、シートの外へ動いても番地のまま（HTMLでは #REF! と計算し、ビルドが知らせる）');
+  assert.equal(C.shiftFormula('=A1048576',1,0),'=#REF!');
+  assert.equal(C.shiftFormula('=XFD1',0,1),'=#REF!');
+  assert.equal(C.shiftFormula('=B2',-2,0),'=#REF!');
+});
+test('a reference is not taken from inside a name before a point or after an underscore (A1.x, _A1)',()=>{
+  assert.equal(C.shiftFormula('=A1.x+A1',1,0),'=A1.x+A2');
+  assert.equal(C.shiftFormula('=_A1+A1',1,0),'=_A1+A2');
+});
+test('validate says where a wrong sheet field is and what it takes',()=>{
+  const sheetWith=patch=>{const w=make();Object.assign(w.sheets[0],patch);return w;};
+  const cases=[
+    [sheetWith({colWidths:[20]}),/sheets\[0\]\.colWidths（24〜2044 のピクセルの数か null を、列の数まで並べる）/],
+    [sheetWith({rowHeights:[600]}),/sheets\[0\]\.rowHeights（16〜546 のピクセルの数か null を、行の数まで並べる）/],
+    [sheetWith({name:'見積/2026'}),/sheets\[0\]\.name "見積\/2026"（シート名は31文字以内で/],
+    [sheetWith({rows:501}),/sheets\[0\]\.rows と cols（上限500行 \/ 100列の、1以上の整数）/],
+    [sheetWith({cells:{A99:{t:'s',v:'x'}}}),/sheets\[0\]\.cells\.A99 範囲外のセル（シートは30行・15列）/],
+    [sheetWith({cells:{A1:{t:'n',v:'1'}}}),/sheets\[0\]\.cells\.A1\.v（t が s なら文字、n なら有限の数、b なら true \/ false）/],
+    [sheetWith({merges:[C.range('A1:B2'),C.range('B2:C3')]}),/結合の重複（sheets\[0\]\.merges\[1\] B2:C3）/],
+  ];
+  for(const [w,message] of cases)assert.throws(()=>C.validate(w),message,String(message));
+  const w=make();w.activeSheet='Sheet1';
+  assert.throws(()=>C.validate(w),/activeSheet "Sheet1"（最初に開くシートの id。s のどれか）/);
+});

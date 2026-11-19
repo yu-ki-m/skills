@@ -22,6 +22,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.dont_write_bytecode = True  # importing build.py must not leave a __pycache__ folder in the skill
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import build  # noqa: E402  (same folder: reads --input as build.py does, and writes messages in UTF-8)
+
 ROOT = Path(__file__).resolve().parents[1]
 CHECK = ROOT / 'scripts' / 'excel_check'
 DATA_RE = re.compile(r'<script id="workbook-data" type="application/json">(.*?)</script>', re.S)
@@ -58,7 +62,11 @@ def coord(a):
 
 def load_workbook(args):
     if args.input:
-        return json.loads(Path(args.input).read_text(encoding='utf-8-sig'))
+        # A book written by hand may use the shorthand (values, formulas, styles): read it as build.py --input does.
+        try:
+            return build.read_input(Path(args.input))
+        except (ValueError, KeyError, TypeError, OSError) as exc:
+            raise SystemExit('エラー: ' + str(exc)) from exc
     m = DATA_RE.search(Path(args.html).read_text(encoding='utf-8-sig'))
     if not m:
         raise SystemExit('workbook-data が見つかりません。このスキルで生成した HTML を指定してください。')
@@ -130,6 +138,7 @@ def run(cmd, what):
 
 
 def main():
+    build.utf8_output()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument('--html', help='このスキルで生成した HTML')

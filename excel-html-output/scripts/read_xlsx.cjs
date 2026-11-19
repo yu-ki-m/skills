@@ -799,6 +799,8 @@ function fromXlsx(buffer, {name = 'book.xlsx'} = {}) {
       const saved = cellValue(c, book);
       if (!saved) continue;
       const [r, col] = C.coord(a), got = C.calculate(workbook, sheet, r, col, new Set(), cache);
+      // A circular reference is no fault of the page's computing; build.py tells of it as one (core.js cautions).
+      if (got === '#CIRC!') continue;
       const same = saved.t === 'n' ? typeof got === 'number' && Math.abs(got - saved.v) <= 1e-9 * Math.max(1, Math.abs(saved.v)) : saved.t === 'e' ? got === saved.v : got === saved.v;
       if (!same) differ.push(`${sheet.name}!${a}（HTML ${JSON.stringify(got)}、Excel ${JSON.stringify(saved.v)}）`);
     }

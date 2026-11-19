@@ -24,6 +24,19 @@ test('行の挿入で下の行がずれ、数式の参照・結合・合計が�
   assert.equal(await x.text('E10'), '¥83,600', '合計の値は変わらない');
 });
 
+test('行や列を挿入しても、別のシートを指す番地とシート名は変えず、同じシートを指す番地だけをずらす', async t => {
+  const x = await env.open(t, book);
+  await x.enter('H4', "='Q1 data'!A5+予備!A5+明細!A5+A5+SUM(予備!A5:B6)+SUM(A5:B6)");
+  await x.clickCell('A5');
+  await x.action('insert-row');
+  let sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.cells.H4.f, "='Q1 data'!A5+予備!A5+明細!A6+A6+SUM(予備!A5:B6)+SUM(A6:B7)", 'Excelと同じく、ほかのシートの番地と範囲は動かない');
+  await x.clickCell('A4');
+  await x.action('insert-col');
+  sheet = (await x.state()).sheet('main');
+  assert.equal(sheet.cells.I4.f, "='Q1 data'!A5+予備!A5+明細!B6+B6+SUM(予備!A5:B6)+SUM(B6:C7)");
+});
+
 test('行の削除は確認してから行い、消えたセルを参照する数式は #REF! になる', async t => {
   const x = await env.open(t, book);
   await x.enter('F4', '=C5*2');
@@ -300,6 +313,22 @@ test('フィルハンドルのドラッグで、相対参照の数式・連続�
   assert.deepEqual([cells.G20.v, cells.H20.v, cells.H20.s.bold], ['見出し', '見出し', true], '右へも値と書式をコピー');
 });
 
+test('数字を含む名前の関数（LOG10）や指数で書いた数の数式も、オートフィルと貼り付けでは参照だけがずれる', async t => {
+  const x = await env.open(t, book);
+  await x.enter('G4', '=LOG10(C4*1E2)');
+  await x.clickCell('G4');
+  await x.page.drag(await x.point('#fill-handle'), await x.point('#cell-G5'));
+  let cells = await x.cells();
+  assert.equal(cells.G5.f, '=LOG10(C5*1E2)', 'LOG10 と 1E2 は番地ではないので変えない');
+  assert.equal(await x.text('G5'), '2.301029996', 'LOG10(200)');
+  await x.clickCell('G4');
+  const copied = await x.copy();
+  await x.clickCell('H6');
+  await x.paste(copied);
+  cells = await x.cells();
+  assert.equal(cells.H6.f, '=LOG10(D6*1E2)');
+});
+
 test('結合セルにかかるオートフィルは、理由を知らせて行わない', async t => {
   const x = await env.open(t, book);
   await x.enter('A10', 'x');
@@ -438,4 +467,32 @@ test('ブック名を変えると、ブラウザーのタブの題名と状態�
   await x.press('Enter');
   assert.equal(await x.evaluate(() => document.title), '新しいブック名');
   assert.equal((await x.state()).book.title, '新しいブック名');
+});
+
+test('使い方の「数式」は、Excelと同じ値で計算する関数の範囲と、計算できない関数の表示を伝える', async t => {
+  const x = await env.open(t, book);
+  await x.click('[data-tab="help"]');
+  await x.click('#help-open');
+  await x.waitDialog('help-dialog');
+  const formulas = await x.evaluate(() => {
+    const dt = [...document.querySelectorAll('#help-dialog dt')].find(d => d.textContent === '数式');
+    return dt?.nextElementSibling?.textContent ?? null;
+  });
+  assert.match(formulas, /139の関数/, '計算できる関数の数');
+  assert.match(formulas, /#NAME\?/, '計算できない関数の表示');
+  assert.ok(!/MOD。未対応の式/.test(formulas), '17個の関数だけを挙げた古い説明ではない');
+});
+
+test('行や列を挿入しても、数字を含む名前の関数（LOG10）や指数で書いた数はそのままで、参照だけがずれる', async t => {
+  const x = await env.open(t, book);
+  await x.enter('G4', '=LOG10(C4*1E2)');
+  await x.clickCell('A2');
+  await x.action('insert-row');
+  let cells = (await x.state()).sheet('main').cells;
+  assert.equal(cells.G5.f, '=LOG10(C5*1E2)', '行の挿入');
+  await x.clickCell('A1');
+  await x.action('insert-col');
+  cells = (await x.state()).sheet('main').cells;
+  assert.equal(cells.H5.f, '=LOG10(D5*1E2)', '列の挿入');
+  assert.equal(await x.text('H5'), '2.477121255', 'LOG10(300)');
 });

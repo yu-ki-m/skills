@@ -130,20 +130,76 @@ test('Home は行の先頭、Ctrl+Home は A1、Ctrl+End は使われている�
   assert.equal(await x.nameBox(), 'J18');
 });
 
-test('スクロールした表でキーボードで上や左へ移っても、アクティブセルは見出しに隠れずに見える', {
-  todo: '既知の不具合: 移動先を scrollIntoView で表示するとき、画面に固定した列見出し・行見出しの分を考えないため、セルがその下に隠れる（app.js の select）',
-}, async t => {
+// The column headers and the row numbers stay over the sheet's top and left edges (and the frozen rows and columns
+// below and beside them), so a cell scrolled in from above or the left must land clear of them, not under them.
+// Whether the active cell is seen is checked at its corners and centre (the fill handle sits on the bottom-right one).
+const hidden = x => x.evaluate(() => {
+  const td = document.querySelector('#grid td.active-cell'), r = td.getBoundingClientRect();
+  for (const [name, px, py] of [['左上', r.left + 4, r.top + 4], ['右上', r.right - 4, r.top + 4], ['左下', r.left + 4, r.bottom - 4], ['中央', (r.left + r.right) / 2, (r.top + r.bottom) / 2]]) {
+    const hit = document.elementFromPoint(px, py);
+    if (!(td === hit || td.contains(hit))) return td.id + ' の' + name + 'が ' + (hit ? hit.tagName + (hit.className ? '.' + hit.className : '') : '画面の外') + ' の下にある';
+  }
+  return null;
+});
+const press = async (x, key, times) => { for (let i = 0; i < times; i++) await x.press(key); };
+
+test('スクロールした表でキーボードで上や左へ移っても、アクティブセルは列見出しや行番号に隠れずに見える', async t => {
   const x = await env.open(t, blankBook({sheet: {rows: 120, cols: 40}}));
-  const covered = () => x.evaluate(() => {
-    const td = document.querySelector('#grid td.active-cell'), r = td.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return td === hit || td.contains(hit) ? null : td.id + ' が ' + hit?.tagName + ' の下にある';
-  });
+  await x.select('A61');
+  await x.press('Control+Home');
+  assert.equal(await hidden(x), null, '下へ移ってから Ctrl+Home で A1 に戻ったとき（1行目が列見出しの下に入らない）');
+  await x.select('A60');
+  await press(x, 'ArrowUp', 40);
+  assert.equal(await hidden(x), null, '↑で画面の上の外へ出たとき');
   await x.select('A100');
-  await x.press('PageUp');
-  assert.equal(await covered(), null, 'PageUp で上へ戻ったとき');
-  await x.select('AN21');
-  for (let i = 0; i < 14; i++) await x.press('ArrowLeft');
-  assert.equal(await covered(), null, '矢印で左へ戻ったとき');
+  await press(x, 'PageUp', 3);
+  assert.equal(await hidden(x), null, 'PageUp を続けて押したとき');
+  await x.select('A5');
+  await press(x, 'ArrowRight', 35);
+  await press(x, 'ArrowLeft', 34);
+  assert.equal(await x.nameBox(), 'B5');
+  assert.equal(await hidden(x), null, '右へスクロールした後に←で戻ったとき（左の端が行番号の下に入らない）');
+  await x.select('A1');
+  await press(x, 'ArrowDown', 60);
+  assert.equal(await hidden(x), null, '↓で画面の下の外へ出たとき');
+  await x.select('A1');
+  await press(x, 'ArrowRight', 30);
+  assert.equal(await hidden(x), null, '→で画面の右の外へ出たとき');
+});
+
+test('範囲の中を Enter で巡って画面の上の外のセルに移っても、隠れずに見える', async t => {
+  const x = await env.open(t, blankBook({sheet: {rows: 120, cols: 12}}));
+  await x.select('B1:B90');
+  await x.press('Enter');
+  assert.equal(await x.nameBox(), 'B1:B90');
+  assert.equal(await x.evaluate(() => document.querySelector('#grid td.active-cell').id), 'cell-B2', 'アクティブセルは範囲の2行目へ移る');
+  assert.equal(await hidden(x), null);
+});
+
+test('枠を固定した表でも、上や左へ移ったセルは固定した行・列の下に隠れない', async t => {
+  const x = await env.open(t, blankBook({sheet: {rows: 120, cols: 40, freeze: {rows: 2, cols: 1}}}));
+  await x.select('B60');
+  await press(x, 'ArrowUp', 40);
+  assert.equal(await hidden(x), null, '↑で、固定した行の下の行へ戻ったとき');
+  await press(x, 'ArrowUp', 18);
+  assert.equal(await x.nameBox(), 'B2');
+  assert.equal(await hidden(x), null, '固定した行に入ったとき');
+  await x.select('B5');
+  await press(x, 'ArrowRight', 35);
+  await press(x, 'ArrowLeft', 35);
+  assert.equal(await x.nameBox(), 'B5');
+  assert.equal(await hidden(x), null, '←で、固定した列のすぐ右の列へ戻ったとき');
+});
+
+test('拡大した表でも、上や左へ移ったセルは見出しに隠れない', async t => {
+  const x = await env.open(t, blankBook({view: {zoom: 150}, sheet: {rows: 120, cols: 40, freeze: {rows: 1, cols: 1}}}));
+  await x.select('B60');
+  await press(x, 'ArrowUp', 40);
+  assert.equal(await hidden(x), null, '↑で戻ったとき');
+  await x.select('B5');
+  await press(x, 'ArrowRight', 30);
+  await press(x, 'ArrowLeft', 28);
+  assert.equal(await hidden(x), null, '←で戻ったとき');
 });
 
 test('PageDown と PageUp は、画面の高さ分だけ上下に移る', async t => {

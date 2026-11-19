@@ -174,7 +174,7 @@ const SAMPLES = [
     book: () => bookOf({A1: {t: 's', v: '左', s: {align: 'left', indent: 2}}, A2: {t: 'n', v: 5, s: {align: 'right', indent: 1}}}),
     excel: x => assert.deepEqual(['A1', 'A2'].map(a => [cellOf(x, a).style.alignment.horizontal, cellOf(x, a).style.alignment.indent]), [['left', 2], ['right', 1]])},
   // Indenting a cell aligned "general" in Excel aligns it left, so such a cell is written, and read back, as aligned left
-  // (the page's screen still shows a number in it aligned right: a todo test in core.test.cjs).
+  // (the page's screen shows it aligned left too: core.test.cjs).
   {name: 'インデント（標準の横位置）', covers: ['style.indent'],
     book: () => bookOf({A1: {t: 'n', v: 5, s: {indent: 2}}}),
     excel: x => assert.deepEqual(cellOf(x, 'A1').style.alignment, {horizontal: 'left', vertical: 'center', wrapText: false, indent: 2}),
