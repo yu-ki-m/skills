@@ -92,6 +92,56 @@ test('フォント・サイズ・文字色・塗りつぶし・塗りなし・�
   assert.equal(await x.value('font'), 'Meiryo', 'リボンは選んでいるセルの書式を示す');
 });
 
+// Excel aligns a cell aligned "general" left once it is indented, whatever its value, and indents it one character
+// (about 9px at 11pt) per level from the side it is aligned to; the cell keeps 3px of padding on each side.
+test('横位置が標準のセルに字下げを付けると、数値もTRUEも左に寄り、左から字下げして描かれる', async t => {
+  const x = await env.open(t, blankBook({sheet: {cells: {
+    A1: {t: 'n', v: 5, s: {indent: 2}}, A2: {t: 'b', v: true, s: {indent: 1}}, A3: {t: 'n', v: 5}, A4: {t: 'n', v: 5, s: {align: 'right', indent: 1}},
+  }}}));
+  const drawn = a => x.evaluate(a => {
+    const td = document.getElementById('cell-' + a), range = document.createRange();
+    range.selectNodeContents(td.querySelector('.cell-text'));
+    const text = range.getBoundingClientRect(), box = td.getBoundingClientRect();
+    return {left: Math.round(text.left - box.left), right: Math.round(box.right - text.right)};
+  }, a);
+  assert.equal((await drawn('A1')).left, 21, '数値は、左の余白3pxと2文字分（9px×2）の字下げの後から描かれる');
+  assert.equal((await drawn('A2')).left, 12, 'TRUE も、左の余白と1文字分の字下げの後から描かれる');
+  assert.ok((await drawn('A3')).right <= 4, '字下げのない数値は、右に寄る');
+  assert.ok(Math.abs((await drawn('A4')).right - 12) <= 1, '右揃えなら、右から字下げする');
+});
+
+// Desktop Excel 16.0 (build 20326, set and read back through COM): giving a cell indented and aligned left or right the
+// alignment 標準 or 中央揃え sets its indent to 0, and 左揃え or 右揃え keeps the indent.
+test('字下げのあるセルでリボンの横位置を「標準」や「中央揃え」にすると、Excelと同じく字下げがなくなる（左揃え・右揃えなら残る）', async t => {
+  const x = await env.open(t, blankBook({sheet: {cells: {
+    A1: {t: 'n', v: 5, s: {align: 'left', indent: 2}}, A2: {t: 'n', v: 5, s: {align: 'right', indent: 2}},
+    A3: {t: 'n', v: 5, s: {align: 'right', indent: 2}}, A4: {t: 'n', v: 5, s: {align: 'left', indent: 2}},
+  }}}));
+  for (const [a, align] of [['A1', 'general'], ['A2', 'center'], ['A3', 'left'], ['A4', 'right']]) {
+    await x.clickCell(a);
+    await x.setControl('align', align);
+  }
+  const cells = await x.cells();
+  assert.deepEqual(['A1', 'A2', 'A3', 'A4'].map(a => [cells[a].s.align, cells[a].s.indent ?? 0]), [['general', 0], ['center', 0], ['left', 2], ['right', 2]]);
+});
+
+// A cell aligned 標準 with an indent is drawn, copied and saved aligned left, and Excel makes such a cell 左揃え. The
+// ribbon shows it 左揃え as well, so that choosing 標準 there is a change, which takes the indent away (the test above);
+// a list box gives no change event when the shown choice is chosen again. A cell aligned right with an indent is drawn
+// aligned right, and shows 右揃え.
+test('横位置が標準で字下げのあるセルは、リボンに「左揃え」と出て、キーボードで「標準」を選ぶと字下げがなくなる', async t => {
+  const x = await env.open(t, blankBook({sheet: {cells: {A1: {t: 'n', v: 5, s: {indent: 2}}, A2: {t: 'n', v: 5, s: {align: 'right', indent: 2}}}}}));
+  await x.clickCell('A1');
+  assert.equal(await x.value('align'), 'left', 'リボンの横位置の欄は「左揃え」');
+  await x.evaluate(() => document.getElementById('align').focus());
+  await x.press('Home');
+  assert.equal(await x.value('align'), 'general', '前提: 欄の先頭の「標準」を選んだ');
+  const s = (await x.cells()).A1.s ?? {};
+  assert.deepEqual([s.align ?? 'general', s.indent ?? 0], ['general', 0], '字下げがなくなる');
+  await x.clickCell('A2');
+  assert.equal(await x.value('align'), 'right', '右揃えで字下げのあるセルは「右揃え」と出る（「左揃え」と出るのは標準のときだけ）');
+});
+
 test('罫線の種類の一覧は、Excelに貼ったときの線の名前で、すべてExcelで表せる線である', async t => {
   const x = await env.open(t, book);
   const options = await x.evaluate(() => [...document.querySelectorAll('#border-line option')].map(o => [o.value, o.textContent]));

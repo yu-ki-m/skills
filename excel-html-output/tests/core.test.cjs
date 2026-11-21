@@ -116,8 +116,8 @@ test('a number written in a formula is read to 15 significant digits, the rest c
     ['=0.30000000000000004=0.3',true],['=1.0000000000000002',1],['=.5',0.5],['=1E+20',1e20],['=1.234567890123456789E-5',0.0000123456789012345]])
     assert.equal(result(f),want,f);});
 // Excel aligns a cell aligned "general" left once it is indented, whatever its value; the clipboard (xlCss) and the
-// xlsx write such a cell aligned left, and the screen must show it so too (a book JSON can hold it: the ribbon has no
-// indent button, and an xlsx read in brings it as aligned left).
+// xlsx write such a cell aligned left, and the screen must show it so too. A book JSON can hold such a cell, and so can
+// a cell aligned left with an indent (read from an xlsx or pasted from Excel) once 標準 is chosen on the ribbon.
 test('a cell aligned general with an indent is shown aligned left and indented from the left, whatever its value, as the clipboard writes it',()=>{
   for(const value of [5,-0.5,true,'#N/A','文字']){const st={...C.DEFAULT,indent:2},shown=C.css(st,value);
     assert.match(shown,/text-align:left;/,JSON.stringify(value));
@@ -126,6 +126,12 @@ test('a cell aligned general with an indent is shown aligned left and indented f
   assert.match(C.css(C.DEFAULT,5),/text-align:right;.*padding-left:3px;padding-right:3px/,'a number not indented stays aligned right');
   assert.match(C.css(C.DEFAULT,true),/text-align:center;/,'and TRUE centred');
   assert.match(C.css({...C.DEFAULT,align:'right',indent:1},5),/text-align:right;.*padding-left:3px;padding-right:12px/,'aligned right, it is indented from the right');});
+test('the Markdown table aligns a column aligned general and indented left, as the screen and the clipboard show it',()=>{const w=make(),s=w.sheets[0];
+  s.cells={A1:{t:'s',v:'字下げ'},B1:{t:'s',v:'左'},C1:{t:'s',v:'真偽'},D1:{t:'s',v:'なし'},
+    A2:{t:'n',v:1200,s:{indent:1}},B2:{t:'n',v:1200,s:{align:'left',indent:1}},C2:{t:'b',v:true,s:{indent:1}},D2:{t:'n',v:5},
+    A3:{t:'n',v:35,s:{indent:1}},B3:{t:'n',v:35,s:{align:'left',indent:1}},C3:{t:'b',v:false,s:{indent:1}},D3:{t:'n',v:6}};
+  const rule=C.markdown(w,s,C.range('A1:D3')).text.split('\n')[1].split('|').slice(1,-1).map(x=>x.trim());
+  assert.deepEqual(rule.map(x=>/^:.*:$/.test(x)?'center':/:$/.test(x)?'right':'left'),['left','left','left','right'],rule.join(' | '));});
 test('validate takes only the values in CHOICES and CELL_TYPES',()=>{const w=make(),s=w.sheets[0];
   for(const align of C.CHOICES.align){s.cells.A1={t:'s',v:'x',s:{align}};assert.doesNotThrow(()=>C.validate(w),align);}
   for(const valign of C.CHOICES.valign){s.cells.A1={t:'s',v:'x',s:{valign}};assert.doesNotThrow(()=>C.validate(w),valign);}

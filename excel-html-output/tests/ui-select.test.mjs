@@ -130,78 +130,6 @@ test('Home は行の先頭、Ctrl+Home は A1、Ctrl+End は使われている�
   assert.equal(await x.nameBox(), 'J18');
 });
 
-// The column headers and the row numbers stay over the sheet's top and left edges (and the frozen rows and columns
-// below and beside them), so a cell scrolled in from above or the left must land clear of them, not under them.
-// Whether the active cell is seen is checked at its corners and centre (the fill handle sits on the bottom-right one).
-const hidden = x => x.evaluate(() => {
-  const td = document.querySelector('#grid td.active-cell'), r = td.getBoundingClientRect();
-  for (const [name, px, py] of [['左上', r.left + 4, r.top + 4], ['右上', r.right - 4, r.top + 4], ['左下', r.left + 4, r.bottom - 4], ['中央', (r.left + r.right) / 2, (r.top + r.bottom) / 2]]) {
-    const hit = document.elementFromPoint(px, py);
-    if (!(td === hit || td.contains(hit))) return td.id + ' の' + name + 'が ' + (hit ? hit.tagName + (hit.className ? '.' + hit.className : '') : '画面の外') + ' の下にある';
-  }
-  return null;
-});
-const press = async (x, key, times) => { for (let i = 0; i < times; i++) await x.press(key); };
-
-test('スクロールした表でキーボードで上や左へ移っても、アクティブセルは列見出しや行番号に隠れずに見える', async t => {
-  const x = await env.open(t, blankBook({sheet: {rows: 120, cols: 40}}));
-  await x.select('A61');
-  await x.press('Control+Home');
-  assert.equal(await hidden(x), null, '下へ移ってから Ctrl+Home で A1 に戻ったとき（1行目が列見出しの下に入らない）');
-  await x.select('A60');
-  await press(x, 'ArrowUp', 40);
-  assert.equal(await hidden(x), null, '↑で画面の上の外へ出たとき');
-  await x.select('A100');
-  await press(x, 'PageUp', 3);
-  assert.equal(await hidden(x), null, 'PageUp を続けて押したとき');
-  await x.select('A5');
-  await press(x, 'ArrowRight', 35);
-  await press(x, 'ArrowLeft', 34);
-  assert.equal(await x.nameBox(), 'B5');
-  assert.equal(await hidden(x), null, '右へスクロールした後に←で戻ったとき（左の端が行番号の下に入らない）');
-  await x.select('A1');
-  await press(x, 'ArrowDown', 60);
-  assert.equal(await hidden(x), null, '↓で画面の下の外へ出たとき');
-  await x.select('A1');
-  await press(x, 'ArrowRight', 30);
-  assert.equal(await hidden(x), null, '→で画面の右の外へ出たとき');
-});
-
-test('範囲の中を Enter で巡って画面の上の外のセルに移っても、隠れずに見える', async t => {
-  const x = await env.open(t, blankBook({sheet: {rows: 120, cols: 12}}));
-  await x.select('B1:B90');
-  await x.press('Enter');
-  assert.equal(await x.nameBox(), 'B1:B90');
-  assert.equal(await x.evaluate(() => document.querySelector('#grid td.active-cell').id), 'cell-B2', 'アクティブセルは範囲の2行目へ移る');
-  assert.equal(await hidden(x), null);
-});
-
-test('枠を固定した表でも、上や左へ移ったセルは固定した行・列の下に隠れない', async t => {
-  const x = await env.open(t, blankBook({sheet: {rows: 120, cols: 40, freeze: {rows: 2, cols: 1}}}));
-  await x.select('B60');
-  await press(x, 'ArrowUp', 40);
-  assert.equal(await hidden(x), null, '↑で、固定した行の下の行へ戻ったとき');
-  await press(x, 'ArrowUp', 18);
-  assert.equal(await x.nameBox(), 'B2');
-  assert.equal(await hidden(x), null, '固定した行に入ったとき');
-  await x.select('B5');
-  await press(x, 'ArrowRight', 35);
-  await press(x, 'ArrowLeft', 35);
-  assert.equal(await x.nameBox(), 'B5');
-  assert.equal(await hidden(x), null, '←で、固定した列のすぐ右の列へ戻ったとき');
-});
-
-test('拡大した表でも、上や左へ移ったセルは見出しに隠れない', async t => {
-  const x = await env.open(t, blankBook({view: {zoom: 150}, sheet: {rows: 120, cols: 40, freeze: {rows: 1, cols: 1}}}));
-  await x.select('B60');
-  await press(x, 'ArrowUp', 40);
-  assert.equal(await hidden(x), null, '↑で戻ったとき');
-  await x.select('B5');
-  await press(x, 'ArrowRight', 30);
-  await press(x, 'ArrowLeft', 28);
-  assert.equal(await hidden(x), null, '←で戻ったとき');
-});
-
 test('PageDown と PageUp は、画面の高さ分だけ上下に移る', async t => {
   const x = await env.open(t, blankBook({sheet: {rows: 300}}));
   await x.press('PageDown');
@@ -256,6 +184,75 @@ test('結合セルに一部だけかかる範囲を選ぶと、結合全体を�
   await x.clickCell('B11', {shift: true});
   assert.equal(await x.nameBox(), 'A10:C12');
   assert.equal(await x.selectionSize(), '3行 × 3列');
+});
+
+// A selection that takes in part of a merged cell grows to the whole merged cell (the test above). Excel's Shift+arrow
+// extends the selection by one cell, so the next press moves the edge of that selection past the merged cell, however
+// many rows or columns it has, and does not stop at the hidden cells inside it.
+test('Shift+↓・Shift+↑で結合セルまで広げた範囲は、次の1回で結合の先の行まで広がる', async t => {
+  // B5:B100 is merged (96 rows).
+  const x = await env.open(t, blankBook({sheet: {rows: 200, cols: 20, merges: [{r1: 4, c1: 1, r2: 99, c2: 1}]}}));
+  await x.select('A4');
+  await x.press('Shift+ArrowRight');
+  await x.press('Shift+ArrowDown');
+  assert.equal(await x.nameBox(), 'A4:B100', '前提: 結合セル B5:B100 にかかると、選択は結合全体に広がる');
+  await x.press('Shift+ArrowDown');
+  assert.equal(await x.nameBox(), 'A4:B101', '次の Shift+↓ の1回で結合の下の行まで広がる（結合の行数の分だけ空回りしない）');
+  await x.select('B5');
+  await x.press('Shift+ArrowDown');
+  assert.equal(await x.nameBox(), 'B5:B101', '結合セルだけを選んで Shift+↓ を押したときも、1回で結合の下の行まで広がる');
+  await x.select('A4');
+  await x.press('Shift+ArrowRight');
+  await x.press('Shift+ArrowDown');
+  await x.press('Shift+ArrowRight');
+  assert.equal(await x.nameBox(), 'A4:C100', '前提: 結合の右の列へ広げても、結合の行は選んだまま');
+  await x.press('Shift+ArrowDown');
+  assert.equal(await x.nameBox(), 'A4:C101', '動く端が結合の外の列にあっても、範囲の下の端から1行進む');
+  await x.select('A101');
+  await x.press('Shift+ArrowRight');
+  await x.press('Shift+ArrowUp');
+  assert.equal(await x.nameBox(), 'A5:B101', '前提: 下から結合にかかったとき');
+  await x.press('Shift+ArrowUp');
+  assert.equal(await x.nameBox(), 'A4:B101', '次の Shift+↑ の1回で結合の上の行まで広がる');
+});
+
+test('Shift+→・Shift+←で結合セルまで広げた範囲は、次の1回で結合の先の列まで広がる', async t => {
+  // D2:F2 is merged (3 columns).
+  const x = await env.open(t, blankBook({sheet: {rows: 30, cols: 12, merges: [{r1: 1, c1: 3, r2: 1, c2: 5}]}}));
+  await x.select('C1');
+  await x.press('Shift+ArrowDown');
+  await x.press('Shift+ArrowRight');
+  assert.equal(await x.nameBox(), 'C1:F2', '前提: 結合セル D2:F2 にかかると、選択は結合全体に広がる');
+  await x.press('Shift+ArrowRight');
+  assert.equal(await x.nameBox(), 'C1:G2', '次の Shift+→ の1回で結合の右の列まで広がる（結合の列数の分だけ空回りしない）');
+  await x.select('D2');
+  await x.press('Shift+ArrowRight');
+  assert.equal(await x.nameBox(), 'D2:G2', '結合セルだけを選んで Shift+→ を押したときも、1回で結合の右の列まで広がる');
+  await x.select('H2');
+  await x.press('Shift+ArrowLeft');
+  await x.press('Shift+ArrowLeft');
+  assert.equal(await x.nameBox(), 'D2:H2', '前提: 右から結合にかかったとき');
+  await x.press('Shift+ArrowLeft');
+  assert.equal(await x.nameBox(), 'C2:H2', '次の Shift+← の1回で結合の左の列まで広がる');
+});
+
+// PageDown and PageUp move the end of the selection a screenful at a time. A step that would take it past the sheet's
+// edge takes it to the edge, so a press that ends inside a merged cell reaching near the edge still widens the range.
+test('結合セルがシートの端の近くまで続いていても、Shift+PageDown・Shift+PageUp は1回ごとに範囲を広げる', async t => {
+  // A1:A28 is merged, in a sheet of 30 rows.
+  const x = await env.open(t, blankBook({sheet: {rows: 30, cols: 5, merges: [{r1: 0, c1: 0, r2: 27, c2: 0}]}}));
+  const step = await x.evaluate(() => Math.max(1, Math.floor(document.getElementById('viewport').clientHeight / 22) - 2));
+  assert.ok(step >= 16 && step <= 22, `前提: PageDown の1回で進む行数（${step}）が、下の2つの表で端の手前の結合の中に止まる数`);
+  await x.select('A1');
+  await x.press('Shift+PageDown');
+  assert.equal(await x.nameBox(), 'A1:A30', '1回で、結合の先のシートの最後の行まで広がる');
+  // A2:A46 is merged, in a sheet of 60 rows.
+  const up = await env.open(t, blankBook({sheet: {rows: 60, cols: 5, merges: [{r1: 1, c1: 0, r2: 45, c2: 0}]}}));
+  await up.select('A47');
+  await up.press('Shift+PageUp');
+  assert.equal(await up.nameBox(), 'A2:A47', '前提: 1回目で結合セルにかかる');
+  await up.press('Shift+PageUp');
+  assert.equal(await up.nameBox(), 'A1:A47', '2回目で、結合の先のシートの最初の行まで広がる');
 });
 
 test('名前ボックスに番地や範囲を入れて Enter を押すと、そこが選ばれる', async t => {

@@ -398,10 +398,12 @@
   }
   // Horizontal alignment Excel shows for "general": numbers and errors right, booleans centre, text left.
   const generalAlign=value=>typeof value==='number'||isErr(value)?'right':typeof value==='boolean'?'center':'left';
+  // The side a cell is drawn on. Excel aligns a cell aligned "general" left once it is indented, whatever its value
+  // (xlCss writes it so too); the screen and the Markdown table both follow this.
+  const shownAlign=(st,value)=>st.align==='general'?(st.indent>0?'left':generalAlign(value)):st.align;
   // Screen CSS. Indent is 1 character (about 9px at 11pt) per level on the aligned side, as in Excel.
-  // Excel aligns a cell aligned "general" left once it is indented, whatever its value (xlCss writes it so too).
   function css(st,value) {
-    const align=st.align==='general'?(st.indent>0?'left':generalAlign(value)):st.align,indent=st.indent*9;
+    const align=shownAlign(st,value),indent=st.indent*9;
     const out={ 'font-family':'"'+st.font.replace(/["\\]/g,'')+'", sans-serif','font-size':st.size+'pt','font-weight':st.bold?'700':'400','font-style':st.italic?'italic':'normal','text-decoration':[(st.underline?'underline':''),(st.strike?'line-through':'')].filter(Boolean).join(' ')||'none','color':st.color,'background-color':st.fill==='none'?'transparent':st.fill,'text-align':align,'vertical-align':st.valign,'white-space':st.wrap?'pre-wrap':'pre','padding-left':(3+(align==='right'?0:indent))+'px','padding-right':(3+(align==='right'?indent:0))+'px' };
     for(const side of ['Top','Right','Bottom','Left']) {const v=st['border'+side];if(v!=='none')out['border-'+side.toLowerCase()]=v;}
     return Object.entries(out).map(([k,v])=>k+':'+v).join(';');
@@ -596,7 +598,7 @@
         const cell=get(s,r,c),value=calculate(w,s,r,c,new Set(),cache),st=style(w,s,cell),label=String(display(value,st.numFmt));
         let text=label.replace(/\r\n?/g,'\n').replace(/\|/g,'\\|').replace(/\n/g,'<br>');
         if(cell.link&&text)text='['+text.replace(/[[\]]/g,'\\$&')+']('+cell.link.replace(/[ ()|]/g,ch=>'%'+ch.charCodeAt(0).toString(16).toUpperCase())+')';
-        row.push({text,align:label===''?'':st.align==='general'?generalAlign(value):st.align});
+        row.push({text,align:label===''?'':shownAlign(st,value)});
       }
       grid.push(row);
     }
